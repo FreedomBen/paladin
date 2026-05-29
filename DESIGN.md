@@ -250,8 +250,10 @@ Secure deletion of the original plaintext is best-effort only.
 | CSPRNG          | OS RNG (`getrandom` / `OsRng`) for salt + nonce prefix  |
 | Secret wiping   | `zeroize` on all key material and derived buffers       |
 
-All primitives come from the [RustCrypto](https://github.com/RustCrypto)
-project (pure-Rust, widely reviewed). We do not roll our own crypto.
+AEAD, KDF, and hash primitives come from the
+[RustCrypto](https://github.com/RustCrypto) project (pure-Rust, widely
+reviewed). Randomness comes from the operating system RNG. We do not roll our
+own crypto.
 
 ### 4.2 Key derivation
 
@@ -289,7 +291,8 @@ decrypted.
 Large files are encrypted as a sequence of fixed-size chunks using the
 **STREAM** construction (Hoang–Reyhanitabar–Rogaway–Vizár; the same scheme used
 by Tink and `age`). The plaintext is split into chunks of `chunk_size` bytes
-(default 64 KiB); the final chunk may be shorter (and may be empty).
+(default 64 KiB); the final chunk may be full-sized or shorter, and is empty
+only for empty plaintext.
 
 For each chunk `i` (0-indexed) the 12-byte nonce is:
 
@@ -448,12 +451,15 @@ The body is a sequence of chunks. Each on-disk chunk is the AEAD output
 carries 0..=`chunk_size` plaintext bytes.
 
 The encryptor fills each chunk by reading up to `chunk_size` plaintext bytes,
-marking a chunk final (`final_flag = 1`) when no further input follows. The
-decryptor reads `chunk_size + 16` bytes at a time and buffers one chunk ahead so
-it can set `final_flag` correctly: a chunk is final iff no bytes follow it. The
-body must contain at least one chunk; an empty file produces exactly one final
-chunk of 16 bytes (tag only). A structurally malformed body — a trailing
-fragment shorter than the 16-byte tag, or no body at all — is reported as an
+marking a chunk final (`final_flag = 1`) when no further input follows. A
+compliant encryptor never emits an extra empty final chunk after one or more
+full non-final chunks; the only empty final chunk is the sole chunk for empty
+plaintext. The decryptor reads `chunk_size + 16` bytes at a time and buffers one
+chunk ahead so it can set `final_flag` correctly: a chunk is final iff no bytes
+follow it. The body must contain at least one chunk; an empty file produces
+exactly one final chunk of 16 bytes (tag only). A structurally malformed body —
+a trailing fragment shorter than the 16-byte tag, no body after a complete
+header, or an empty final chunk after a previous chunk — is reported as an
 authentication failure (exit 3), exactly like a wrong password or a flipped bit;
 truncation and tampering are deliberately indistinguishable (§4.4).
 
@@ -668,8 +674,9 @@ lives in `symcrypt-common` and is shared by the CLI and TUI.
 unrecognized: an out-of-range `salt_len`, `nonce_prefix_len`, `chunk_size`,
 `name_len`, or KDF cost (§5.4); a stored `name` whose bytes are not valid UTF-8;
 corrupt ASCII armor; or end-of-input reached before the header is complete. A
-body too short to form a chunk (a trailing fragment under 16 bytes, or no body at
-all) is reported as `Auth` (exit 3), not distinguished from tampering (§4.4, §5.5).
+body too short to form a chunk (a trailing fragment under 16 bytes, or no body
+after a complete header) is reported as `Auth` (exit 3), not distinguished from
+tampering (§4.4, §5.5).
 
 On SIGINT (Ctrl-C), the CLI installs a handler that flips the same cancellation
 flag the worker-thread front-ends use. Cancellation is cooperative: the core
@@ -706,8 +713,9 @@ calls the same four core functions.
 
 A single full-screen form, navigable entirely by keyboard:
 
-All TUI path fields accept real filesystem paths only; a literal `-` is rejected
-because the terminal UI owns stdin/stdout. CLI remains the only v1 front-end with
+All TUI path fields accept filesystem paths only; a literal `-` is rejected
+because the terminal UI owns stdin/stdout. Input and keyfile paths must exist;
+output paths may name a new file. CLI remains the only v1 front-end with
 stdin/stdout streaming.
 
 - **Mode tabs:** Encrypt / Decrypt / Info / Verify.
