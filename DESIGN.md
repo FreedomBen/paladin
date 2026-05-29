@@ -43,7 +43,8 @@ without out-of-band parameters (other than the password/keyfile).
 - **Self-describing files**: a magic marker and a versioned, authenticated
   header carry everything needed to decrypt (cipher, KDF, KDF params, salt,
   nonce prefix, chunk size) — only the secret (password/keyfile) is external.
-- **Streaming**: encrypt/decrypt files of arbitrary size with bounded memory.
+- **Streaming**: encrypt/decrypt large files with bounded memory, within the v1
+  plaintext size cap (§4.3).
 - **Three thin front-ends, one core**: a scriptable CLI, an interactive TUI, and
   a GTK desktop app, all calling the same library so behavior never diverges and
   nothing is reimplemented per front-end.
@@ -263,16 +264,16 @@ key (32 bytes) = KDF(secret_input, salt, params)
   password yields different keys with overwhelming probability — so AEAD keys
   are not reused across files unless the RNG fails or repeats a salt.
 
-**Keyfiles (v1).** A keyfile is read in full as raw bytes (capped at 1 MiB to bound memory; a
-larger keyfile is a usage error, exit 2), combined with the password as shown
-above, and zeroized after key derivation. With a nonempty
-password it is a second factor — an attacker needs *both* the password and the
-keyfile. In explicit keyfile-only mode (`--no-password -k`), the keyfile is the
-only secret. Advisory flag bit1 is set when a keyfile was used, so on decrypt a
-front-end can say "this file needs a keyfile" rather than only reporting an auth
-failure when `-k` is missing. This bit is unauthenticated until decrypt/verify
-succeeds, so it is only a hint for diagnostics; it never bypasses tag
-verification, changes the exit code, or proves that a keyfile was required.
+**Keyfiles (v1).** A keyfile is read in full as raw bytes (must be 1..=1 MiB to
+bound memory; an empty or larger keyfile is a usage error, exit 2), combined
+with the password as shown above, and zeroized after key derivation. With a
+nonempty password it is a second factor — an attacker needs *both* the password
+and the keyfile. In explicit keyfile-only mode (`--no-password -k`), the keyfile
+is the only secret. Advisory flag bit1 is set when a keyfile was used, so on
+decrypt a front-end can say "this file needs a keyfile" rather than only
+reporting an auth failure when `-k` is missing. This bit is unauthenticated until
+decrypt/verify succeeds, so it is only a hint for diagnostics; it never bypasses
+tag verification, changes the exit code, or proves that a keyfile was required.
 Keyfile contents are never stored; losing the keyfile means the file cannot be
 decrypted.
 
@@ -491,7 +492,8 @@ all three front-ends stay identical.
 symcrypt (-e|--encrypt | -d|--decrypt | -i|--info | --verify) <FILE> [options]
 ```
 
-Exactly one mode is required. `<FILE>` of `-` means **stdin**.
+Except for `-h/--help` and `-V/--version`, exactly one mode and one `<FILE>` are
+required. `<FILE>` of `-` means **stdin**.
 
 ### 6.2 Modes
 
@@ -501,6 +503,18 @@ Exactly one mode is required. `<FILE>` of `-` means **stdin**.
 | `-d, --decrypt`  | Decrypt `<FILE>` → output.                                         |
 | `-i, --info`     | Print unauthenticated header metadata (cipher, KDF + params, version, flags, chunk size, and the stored filename when present and well-formed) without decrypting. No password needed. |
 | `--verify`       | Stream-decrypt and discard the output (nothing written) to verify integrity + password. Exit 0 if valid. |
+
+`--info` writes stable UTF-8 `key: value` lines to stdout in this exact order:
+`format`, `version`, `cipher`, `kdf`, `kdf_params`, `flags`, `keyfile_hint`,
+`chunk_size`, `salt_len`, `nonce_prefix_len`, `name_status`, and `name`. Values
+are display forms from the shared core helpers: `format: symcrypt`, decimal
+numeric values, lowercase cipher/KDF names, `flags` as two-digit lowercase hex
+(`0x00`), and `keyfile_hint: true|false`. `kdf_params` is
+`memory=<KiB>,time=<N>,parallelism=<N>` for Argon2id, `log_n=<N>,r=<N>,p=<N>`
+for scrypt, and `iterations=<N>` for PBKDF2. `name_status` is `absent`,
+`present`, or `ignored_unsafe`; `name` is the stored basename only when
+`name_status: present`, and is otherwise empty. A non-UTF-8 stored name is a
+malformed header and does not produce normal `--info` output.
 
 ### 6.3 Options
 
@@ -527,7 +541,7 @@ Exactly one mode is required. `<FILE>` of `-` means **stdin**.
 | `--remove`                 | enc/dec        | Best-effort delete the input after success (default: keep).           |
 | `--progress/--no-progress` | enc/dec/verify | Progress bar. Default: auto (on when stderr is a TTY).                |
 | `-v, --verbose`            | all            | More diagnostics on stderr.                                           |
-| `-q, --quiet`              | all            | Suppress non-error output.                                            |
+| `-q, --quiet`              | all            | Suppress progress and status output.                                  |
 | `-V, --version`            | —              | Print version.                                                        |
 | `-h, --help`               | —              | Print help.                                                           |
 
@@ -539,24 +553,34 @@ KDF-specific cost knobs are also usage errors unless their matching `--kdf` is
 selected: Argon2id knobs require `--kdf argon2id` or the default KDF, scrypt
 knobs require `--kdf scrypt`, and PBKDF2 knobs require `--kdf pbkdf2`. Supplying
 `--scrypt-*` or `--pbkdf2-iterations` never implicitly changes the KDF.
+`-q/--quiet` and `-v/--verbose` are mutually exclusive. `--progress` with
+`--quiet` is a usage error; `--no-progress` with `--quiet` is allowed but
+redundant. Quiet mode does not suppress primary stdout output such as `--info`,
+nor does it suppress warnings or errors on stderr.
 
 ### 6.4 Password input rules
 
-For modes that require a secret (Encrypt / Decrypt / Verify), exactly one of
-`-p`, `--password-file`, `--password-env`, or `--no-password` may be supplied. If
-none is supplied, the CLI uses an **interactive prompt** (no echo). On
-**encrypt**, an interactive prompt asks twice and must match.
+For modes that require a secret (Encrypt / Decrypt / Verify), at most one of
+`-p`, `--password-file`, `--password-env`, or `--no-password` may be supplied;
+supplying more than one is a usage error. If none is supplied, the CLI uses an
+**interactive prompt** (no echo). On **encrypt**, an interactive prompt asks
+twice and must match.
 `--no-password` is valid only with `-k` and is the explicit keyfile-only mode.
 A keyfile (`-k`), if given, is always combined with whatever password source is
 used. The resolved secret must contain at least one byte of password or keyfile
 material; if both are empty, this is a usage error before the core is called.
+`-k/--keyfile` requires a real file path; `-` is rejected so stdin remains
+reserved for the main input stream.
 
 Password bytes are used exactly as provided; symcrypt does no Unicode
 normalization. Password text obtained from CLI argv, environment-variable
 values, TUI fields, and GTK entries is encoded as UTF-8 bytes; non-UTF-8
-password argv or environment values are usage errors.
-`--password-file` reads raw bytes and removes exactly one trailing LF or CRLF if
-present; no other whitespace is trimmed.
+password argv or environment values are usage errors. If `--password-env <VAR>`
+names an unset variable, that is a usage error.
+`--password-file` requires a real file path; `-` is rejected so stdin remains
+reserved for the main input stream. It reads at most 1 MiB of raw bytes; a larger
+file is a usage error. It removes exactly one trailing LF or CRLF if present; no
+other whitespace is trimmed.
 
 ### 6.5 Output defaults
 
@@ -576,6 +600,9 @@ present; no other whitespace is trimmed.
   only after success. On Unix, create the temporary output with mode `0600`
   (`rw-------`) and do not preserve source-file permissions in v1. Remove the
   temporary file on error, authentication failure, or cancellation.
+- **`--remove`:** after a successful encrypt/decrypt and successful output
+  finalization, attempt to delete the input path. If deletion fails, keep the
+  successful output, print a warning on stderr, and still exit 0.
 - `-o -` writes to stdout. Progress is independent of stdout (it renders on
   stderr), so it still follows the normal rule — on when stderr is a TTY; armor
   is recommended when stdout is a terminal. If stdout is used, partial output
@@ -816,11 +843,15 @@ always uses OS randomness.
 **Front-end tests.** Because the front-ends are thin, most coverage lives in
 core. `symcrypt` gets CLI integration tests (`assert_cmd` + `tempfile`):
 default-extension behavior, required `-o` for stdin encrypt/decrypt,
-`--remove` rejection with stdin, output-equals-input refusal, `-o -` / stdout, armor round-trip, `--info`
-output, `--verify` success/failure, clobber refusal vs `-f`, KDF-knob mismatch
-usage errors, temp-file cleanup and Unix `0600` output mode, exit codes
-including 130 for cancellation, and password bytes via
-file/env/`--no-password`. The `symcrypt-common`
+`--remove` rejection with stdin, `--remove` warning-but-success when deletion
+fails after successful output finalization, output-equals-input refusal, `-o -`
+/ stdout, armor round-trip, exact `--info` output, `--verify` success/failure,
+clobber refusal vs `-f`, KDF-knob mismatch usage errors, `-q`/`-v` and
+`--progress`/`--quiet` conflicts, rejection of `-` for `--password-file` and
+`-k/--keyfile`, password-file and keyfile size caps, zero-byte keyfile
+rejection, temp-file cleanup and Unix `0600` output mode, exit codes including
+130 for cancellation, and password bytes via file/env/`--no-password`. The
+`symcrypt-common`
 glue (path-or-stdin opening, clobber check, best-effort remove, password-source
 exclusivity/resolution, exit-code mapping, and temp-file finalization) is
 unit-tested directly. `symcrypt-tui` gets light tests of its non-UI glue;
@@ -853,8 +884,10 @@ Per repo convention, tests accompany every code change.
   if an operation fails late.
 - **File outputs are private by default.** On Unix, temporary output files are
   created with mode `0600` and source-file permissions are not preserved in v1.
-- **Nonce reuse is structurally avoided:** a random per-file key (random salt) +
-  per-chunk counter/final-flag nonce means no `(key, nonce)` pair repeats.
+- **Nonce reuse is avoided under the RNG assumption:** a random per-file key
+  (random salt) plus a random nonce prefix and per-chunk counter/final-flag nonce
+  means no `(key, nonce)` pair repeats unless the RNG repeats the relevant
+  values or fails.
 - **Header downgrade/tamper** is prevented during decrypt/verify by
   authenticating the full header as AAD. Header metadata shown by `--info` is
   unauthenticated until decrypt or verify succeeds.
@@ -900,7 +933,8 @@ Asymmetric crypto, compression, plaintext padding / size hiding, keyfiles
 managed by a keyring/agent, multi-recipient files, special handling of Windows
 reserved device names (`CON`, `NUL`, …) in stored filenames, and HKDF-based
 per-file subkey separation (the random-salt-per-file design already prevents key
-reuse; HKDF separation is a possible hardening later).
+reuse except on salt collision or RNG failure; HKDF separation is a possible
+hardening later).
 
 ---
 
@@ -933,6 +967,11 @@ All open questions are now settled:
       `--no-password`; cancellation returns `SymError::Canceled`, maps to CLI
       exit 130, and is shown as non-error cancellation in UIs (§6.4, §6.6, §7,
       §8).
+- [x] **CLI edge-case behavior.** `--info` has stable `key: value` output;
+      password/keyfile paths reject `-`; password files and keyfiles are
+      size-capped; empty keyfiles are rejected; quiet/verbose/progress conflicts
+      are defined; and `--remove` warns but still exits 0 if deletion fails
+      after a successful operation (§6).
 
 ---
 
