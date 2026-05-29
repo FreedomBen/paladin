@@ -30,7 +30,7 @@ without out-of-band parameters (other than the password/keyfile).
 12. [Defaults summary](#12-defaults-summary)
 13. [Out of scope for v1](#13-out-of-scope-for-v1)
 14. [Resolved decisions](#14-resolved-decisions)
-15. [Implementation checklist](#15-implementation-checklist)
+15. [Implementation plan](#15-implementation-plan)
 
 ---
 
@@ -79,6 +79,10 @@ same code path.
 symcrypt/
 ├── Cargo.toml                 # workspace manifest
 ├── DESIGN.md
+├── IMPLEMENTATION_PLAN_01_CORE.md   # per-component implementation plans (stubs)
+├── IMPLEMENTATION_PLAN_02_CLI.md
+├── IMPLEMENTATION_PLAN_03_TUI.md
+├── IMPLEMENTATION_PLAN_04_GTK.md
 ├── README.md                  # (later)
 └── crates/
     ├── symcrypt-core/         # library — ALL crypto, format, streaming, pure helpers
@@ -723,30 +727,17 @@ All open questions are now settled:
 
 ---
 
-## 15. Implementation checklist
+## 15. Implementation plan
 
-- [ ] Scaffold Cargo workspace + five crates; pin dependencies.
-- [ ] `core`: error types (`SymError`, `Result`).
-- [ ] `core`: `Secret` (password + keyfile) with zeroization.
-- [ ] `core`: cipher dispatch (AES-256-GCM, ChaCha20-Poly1305).
-- [ ] `core`: KDF dispatch (Argon2id, scrypt, PBKDF2) + param encoding + defaults.
-- [ ] `core`: header serialize / parse (+ optional filename, flags, versioning).
-- [ ] `core`: STREAM chunked encrypt/decrypt with progress + cancellation.
-- [ ] `core`: ASCII armor wrap/unwrap + auto-detect.
-- [ ] `core`: pure helpers — default output paths, cipher/KDF name parsing.
-- [ ] `core`: unit, round-trip, tamper, and KAT tests.
-- [ ] `symcrypt-common`: path-or-stdin I/O, clobber check, secure remove, password-source resolution, exit-code mapping (+ unit tests).
-- [ ] `symcrypt` (cli): arg parsing (clap) and mode dispatch.
-- [ ] `symcrypt` (cli): password resolution (flag/file/env/prompt + confirm) and keyfile.
-- [ ] `symcrypt` (cli): encrypt/decrypt/info/verify; output defaults; clobber; remove.
-- [ ] `symcrypt` (cli): progress bar; verbosity; exit codes.
-- [ ] `symcrypt` (cli): integration tests.
-- [ ] `symcrypt-tui`: ratatui/crossterm scaffold, event loop, form widgets.
-- [ ] `symcrypt-tui`: masked password capture, advanced options, path prefill.
-- [ ] `symcrypt-tui`: worker thread + progress gauge + cancellation.
-- [ ] `symcrypt-gtk`: relm4 component (model/inputs/view), libadwaita widgets, `gtk::FileDialog`, drag-and-drop.
-- [ ] `symcrypt-gtk`: relm4 Command/Worker for off-thread crypto; progress + cancellation; encrypt/decrypt/info flows.
-- [ ] Docs: README, `--help` text, man pages; `.desktop` file for `symcrypt-gtk`.
-- [ ] Packaging: `cargo install` for `symcrypt`/`symcrypt-tui`; build/run notes for GTK (needs GTK4 + libadwaita dev libs).
-```
+The step-by-step implementation plan now lives in per-component files, so this
+document stays focused on *what* to build while the plans capture *how* and *in
+what order*. They currently start as stubs holding the original checklist items
+and will be expanded once this design stabilizes.
+
+| Plan file                          | Covers                                                       |
+| ---------------------------------- | ------------------------------------------------------------ |
+| `IMPLEMENTATION_PLAN_01_CORE.md`   | Workspace scaffold, `symcrypt-core`, and `symcrypt-common`.  |
+| `IMPLEMENTATION_PLAN_02_CLI.md`    | `symcrypt` command-line front-end.                           |
+| `IMPLEMENTATION_PLAN_03_TUI.md`    | `symcrypt-tui` terminal front-end.                           |
+| `IMPLEMENTATION_PLAN_04_GTK.md`    | `symcrypt-gtk` relm4/libadwaita desktop front-end.           |
 
