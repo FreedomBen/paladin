@@ -263,8 +263,9 @@ key (32 bytes) = KDF(secret_input, salt, params)
   password yields different keys with overwhelming probability — so AEAD keys
   are not reused across files unless the RNG fails or repeats a salt.
 
-**Keyfiles (v1).** A keyfile is read in full as raw bytes, combined with the
-password as shown above, and zeroized after key derivation. With a nonempty
+**Keyfiles (v1).** A keyfile is read in full as raw bytes (capped at 1 MiB to bound memory; a
+larger keyfile is a usage error, exit 2), combined with the password as shown
+above, and zeroized after key derivation. With a nonempty
 password it is a second factor — an attacker needs *both* the password and the
 keyfile. In explicit keyfile-only mode (`--no-password -k`), the keyfile is the
 only secret. Advisory flag bit1 is set when a keyfile was used, so on decrypt a
@@ -300,11 +301,17 @@ nonce[11]     = final_flag     # 0x00 for normal chunks, 0x01 for the last chunk
   with `final_flag = 1` is the genuine last one. Removing or adding a chunk
   flips an expected flag and fails authentication.
 - **Counter overflow:** refuse to encrypt a stream needing more than 2³² chunks
-  (≈ 256 TiB at 64 KiB), which is far beyond practical inputs.
+  (≈ 256 TiB at 64 KiB), which is far beyond practical inputs. On decrypt the
+  counter is advanced with checked arithmetic; a stream that would exceed 2³²
+  chunks is rejected as an authentication failure (`SymError::Auth`, exit 3)
+  rather than wrapping the counter.
 - **v1 file-size cap:** refuse to encrypt plaintext larger than 64 GiB. This is
   comfortably below the nonce counter limit and keeps AES-GCM usage within a
-  conservative per-key data bound. Larger-file support can later use explicit
-  segment keys or another reviewed construction.
+  conservative per-key data bound. Exceeding either the chunk-count or the
+  file-size limit while encrypting is reported as `SymError::InputTooLarge`
+  (exit 1), detected during streaming and before any output is finalized.
+  Larger-file support can later use explicit segment keys or another reviewed
+  construction.
 
 ### 4.4 Verification semantics
 
@@ -345,7 +352,7 @@ authenticated via AAD during decrypt/verify.
 | 20                | 4                  | `kdf_p3`           | u32                                               |
 | 24                | 1                  | `salt_len`         | bytes (default 16)                                |
 | 25                | `salt_len`         | `salt`             | random                                            |
-| 25+`salt_len`     | 1                  | `nonce_prefix_len` | bytes (default 7)                                 |
+| 25+`salt_len`     | 1                  | `nonce_prefix_len` | bytes (exactly 7 in v1)                           |
 | 26+`salt_len`     | `nonce_prefix_len` | `nonce_prefix`     | random                                            |
 | …                 | 4                  | `chunk_size`       | u32, plaintext bytes per chunk (default 65536)    |
 | … (if flags bit0) | 2                  | `name_len`         | u16, 1..=255                                      |
@@ -356,8 +363,9 @@ optional `name` field, i.e. everything before the body.
 
 When the filename flag is present, `name` is a display/output hint only — never
 trusted as a path. A well-formed `name` is a single UTF-8 basename of 1..=255
-bytes that contains no `/`, `\`, `:`, NUL, or control character (any byte
-< 0x20), and is neither `.` nor `..` (interior dots, as in `report.pdf`, are
+bytes that contains no `/`, `\`, `:`, or NUL, no Unicode control character
+(U+0000–U+001F, U+007F, or U+0080–U+009F), and is neither `.` nor `..`
+(interior dots, as in `report.pdf`, are
 allowed). On encryption, front-ends derive it from the input path basename when
 `--name` is set, reject `--name` when the input is stdin, reject any non-UTF-8 or
 unsafe basename rather than sanitizing it, and never store directory components.
@@ -491,7 +499,7 @@ Exactly one mode is required. `<FILE>` of `-` means **stdin**.
 |------------------|-------------------------------------------------------------------|
 | `-e, --encrypt`  | Encrypt `<FILE>` → output.                                         |
 | `-d, --decrypt`  | Decrypt `<FILE>` → output.                                         |
-| `-i, --info`     | Print unauthenticated header metadata (cipher, KDF + params, version, flags, chunk size) without decrypting. No password needed. |
+| `-i, --info`     | Print unauthenticated header metadata (cipher, KDF + params, version, flags, chunk size, and the stored filename when present and well-formed) without decrypting. No password needed. |
 | `--verify`       | Stream-decrypt and discard the output (nothing written) to verify integrity + password. Exit 0 if valid. |
 
 ### 6.3 Options
@@ -514,7 +522,7 @@ Exactly one mode is required. `<FILE>` of `-` means **stdin**.
 | `--scrypt-p <N>`           | encrypt        | scrypt parallelization parameter `p`.                                 |
 | `--pbkdf2-iterations <N>`  | encrypt        | PBKDF2-HMAC-SHA256 iteration count.                                   |
 | `-a, --armor`              | encrypt        | ASCII-armored (base64) output. (Decrypt/verify/info auto-detect.)     |
-| `--name`                   | encrypt        | Store the original filename in the header (off by default; sensitive). |
+| `--name`                   | encrypt        | Store the input's basename; boolean switch, off by default (sensitive). |
 | `-f, --force`              | enc/dec        | Overwrite an existing output file (default: refuse).                  |
 | `--remove`                 | enc/dec        | Best-effort delete the input after success (default: keep).           |
 | `--progress/--no-progress` | enc/dec/verify | Progress bar. Default: auto (on when stderr is a TTY).                |
@@ -558,15 +566,20 @@ present; no other whitespace is trimmed.
   strip `.symcrypt.asc`, then `.symcrypt`, then `.asc`; else append `.dec`.
   Stored names are written beside the input file. Refuse to overwrite unless
   `-f`.
+- **Output must differ from input:** if the resolved output path refers to the
+  same file as the input, the operation is a usage error (exit 2), refused
+  before any work begins — preventing the temp-file rename from clobbering the
+  source and, with `--remove`, preventing deletion of the freshly written output.
 - **Stdin input (`<FILE>` is `-`):** encrypt/decrypt require `-o`; `--remove` is
   rejected.
 - **File outputs:** write to a sibling temporary file, then rename it into place
   only after success. On Unix, create the temporary output with mode `0600`
   (`rw-------`) and do not preserve source-file permissions in v1. Remove the
   temporary file on error, authentication failure, or cancellation.
-- `-o -` writes to stdout (progress is then forced off; armor recommended for
-  terminals). If stdout is used, partial output may already have been written
-  before an error is detected.
+- `-o -` writes to stdout. Progress is independent of stdout (it renders on
+  stderr), so it still follows the normal rule — on when stderr is a TTY; armor
+  is recommended when stdout is a terminal. If stdout is used, partial output
+  may already have been written before an error is detected.
 
 ### 6.6 Exit codes
 
@@ -582,7 +595,7 @@ present; no other whitespace is trimmed.
 These codes map directly from `symcrypt-core`'s `SymError` variants — the
 front-end classifies nothing itself: `Auth` → 3; `BadMagic` /
 `UnsupportedVersion` / `UnknownCipher` / `UnknownKdf` / `ReservedFlags` /
-`MalformedHeader` → 4; `Canceled` → 130; `Io` and the like → 1; argument/usage
+`MalformedHeader` → 4; `Canceled` → 130; `Io`, `InputTooLarge`, and the like → 1; argument/usage
 problems caught before the core is called → 2. The mapping lives in
 `symcrypt-common` and is shared by the CLI and TUI.
 
@@ -637,8 +650,9 @@ A single full-screen form, navigable entirely by keyboard:
   inside the event loop), plus a **confirm** field shown only in Encrypt mode,
   a show/hide toggle, and a keyfile-only toggle equivalent to `--no-password`.
 - **Advanced** (collapsible): Encrypt-only cipher and KDF selectors, `--name`
-  and armor toggles, and KDF-specific cost knobs; keyfile path is available in
-  Encrypt / Decrypt / Verify.
+  and armor toggles, KDF-specific cost knobs, and (Encrypt / Decrypt)
+  remove-input-after-success and overwrite-existing toggles mirroring the CLI's
+  `--remove` and `-f`; keyfile path is available in Encrypt / Decrypt / Verify.
 - **Progress gauge** + status line during an operation.
 - **Footer** key hints (Tab/Shift-Tab to move, Enter to run, Esc to cancel/quit,
   `?` for help).
@@ -678,7 +692,7 @@ relm4 structures the app as the Elm triad: a `Model` (UI state), `Input`
 messages (user/UI events), and a declarative `view!`. `AppModel` holds the
 selected mode, input/output paths, password + confirm, keyfile-only choice,
 advanced options (cipher, KDF, KDF-specific cost knobs, keyfile, `--name`,
-armor), and run status/progress. UI events become `Input` messages —
+armor, and a remove-input-after-success toggle), and run status/progress. UI events become `Input` messages —
 `SetInputFile`, `PickOutput`, `SetPassword`, `SetKeyfile`, `ToggleAdvanced`,
 `Run`, `Cancel` — handled in `update`, which mutates the model and re-renders.
 The model never calls crypto directly; it builds a `Secret` + `EncryptOptions`
@@ -690,7 +704,8 @@ and invokes the core.
 - `adw::ViewStack` + `ViewSwitcher` for the Encrypt / Decrypt / Info / Verify modes.
 - `adw::EntryRow` for paths, each with a "browse" button opening
   `gtk::FileDialog`; the output row is shown only for Encrypt / Decrypt and is
-  prefilled from `core::default_*_output` (§6.5).
+  prefilled from `core::default_*_output` (§6.5). The save dialog's native
+  overwrite confirmation is the GTK equivalent of the CLI's `-f`.
 - `adw::PasswordEntryRow` for the password in Encrypt / Decrypt / Verify modes
   (+ a confirm row in Encrypt mode), a keyfile-only toggle equivalent to
   `--no-password`, and a keyfile chooser row (`-k`).
@@ -766,8 +781,9 @@ chosen for being pure-Rust and widely reviewed.
   and excessive KDF costs before allocation or key derivation, reporting them as
   `MalformedHeader` (exit 4); a non-UTF-8 stored name is likewise rejected, while
   a valid-UTF-8 but unsafe name is ignored in favor of input-path derivation.
-- Encrypt-option validation rejects an unsafe `--name`, mismatched KDF knobs,
-  and plaintext larger than the v1 size cap before output finalization.
+- Encrypt-option validation rejects an unsafe `--name` and mismatched KDF
+  knobs; encrypting plaintext larger than the v1 size cap fails with
+  `InputTooLarge` before any output is finalized.
 - ASCII armor parser accepts LF/CRLF and surrounding whitespace, and rejects
   extra non-whitespace outside the markers, invalid base64, and missing end
   markers.
@@ -800,7 +816,7 @@ always uses OS randomness.
 **Front-end tests.** Because the front-ends are thin, most coverage lives in
 core. `symcrypt` gets CLI integration tests (`assert_cmd` + `tempfile`):
 default-extension behavior, required `-o` for stdin encrypt/decrypt,
-`--remove` rejection with stdin, `-o -` / stdout, armor round-trip, `--info`
+`--remove` rejection with stdin, output-equals-input refusal, `-o -` / stdout, armor round-trip, `--info`
 output, `--verify` success/failure, clobber refusal vs `-f`, KDF-knob mismatch
 usage errors, temp-file cleanup and Unix `0600` output mode, exit codes
 including 130 for cancellation, and password bytes via
@@ -842,7 +858,7 @@ Per repo convention, tests accompany every code change.
 - **Header downgrade/tamper** is prevented during decrypt/verify by
   authenticating the full header as AAD. Header metadata shown by `--info` is
   unauthenticated until decrypt or verify succeeds.
-- **Keyfiles** can add a second factor but are read into process memory; they
+- **Keyfiles** can add a second factor but are read into process memory (size-capped at 1 MiB); they
   are zeroized after key derivation, and their loss is unrecoverable.
   Keyfile-only operation requires an explicit `--no-password` / keyfile-only
   choice and relies on possession of that file as the only secret.
