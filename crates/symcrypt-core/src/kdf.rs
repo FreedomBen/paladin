@@ -139,8 +139,6 @@ impl KdfParams {
     }
 
     /// The [`KdfId`] this parameter variant belongs to.
-    // Wired up by header.rs / the encrypt path in a later core task.
-    #[allow(dead_code)]
     pub(crate) fn kdf_id(&self) -> KdfId {
         match self {
             KdfParams::Argon2id { .. } => KdfId::Argon2id,
