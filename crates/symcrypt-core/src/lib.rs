@@ -5,8 +5,10 @@
 //! never decides whether to overwrite, and never exits the process. See
 //! `DESIGN.md` for the authoritative specification.
 
+mod cipher;
 mod error;
 mod secret;
 
+pub use cipher::CipherId;
 pub use error::{Result, SymError};
 pub use secret::{Secret, KEYFILE_MAX_BYTES};
