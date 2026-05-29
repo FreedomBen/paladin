@@ -186,6 +186,13 @@ impl Default for EncryptOptions { /* secure defaults from §12 */ }
 pub struct Progress { pub done: u64, pub total: Option<u64> }
 type OnProgress = dyn FnMut(Progress) -> std::ops::ControlFlow<()>;
 
+/// Parsed header metadata returned by `inspect`. Exposes the §5.2/§5.4 wire
+/// fields — cipher, kdf, kdf_params, decoded flags (filename-present and the
+/// `keyfile_hint`), chunk_size, salt_len, nonce_prefix_len — plus the stored
+/// name and a `name_status` (absent / present / ignored_unsafe; see §6.2). It
+/// carries no key material and is unauthenticated until decrypt/verify succeeds.
+pub struct Header { /* … */ }
+
 // ---- The four operations every front-end calls ----
 
 pub fn encrypt<R: Read, W: Write>(
@@ -468,7 +475,7 @@ The encryptor fills each chunk by reading up to `chunk_size` plaintext bytes,
 marking a chunk final (`final_flag = 1`) when no further input follows. A
 compliant encryptor never emits an extra empty final chunk after one or more
 full non-final chunks; the only empty final chunk is the sole chunk for empty
-plaintext. The decryptor reads `chunk_size + 16` bytes at a time and buffers one
+plaintext. The decryptor reads up to `chunk_size + 16` bytes at a time and buffers one
 chunk ahead so it can set `final_flag` correctly: a chunk is final iff no bytes
 follow it. The body must contain at least one chunk; an empty file produces
 exactly one final chunk of 16 bytes (tag only). A structurally malformed body —
@@ -495,7 +502,9 @@ With `--armor`, the binary container is base64-encoded and wrapped:
 Encryption uses standard base64 (RFC 4648 `+`/`/` alphabet, with `=` padding),
 writes LF line endings, wraps complete base64 lines at exactly 64 columns (with
 the final line shorter when needed), and emits no extra text before the begin
-marker or after the end marker. Decrypt,
+marker or after the end marker. The END marker line is
+terminated by a single LF, so the armored output ends with exactly one newline
+and no trailing blank line. Decrypt,
 verify, and info auto-detect armor by the `-----BEGIN SYMCRYPT MESSAGE-----`
 line and strip it before parsing the binary header. They accept LF or CRLF line
 endings and surrounding whitespace, but require the exact begin/end marker
@@ -635,6 +644,12 @@ stdin remains reserved for the main input stream. Directories, special files,
 and symlinks that resolve to non-regular files are usage errors. It reads at
 most 1 MiB of raw bytes; a larger file is a usage error. It removes exactly one
 trailing LF or CRLF if present; no other whitespace is trimmed.
+
+Password length is not separately capped: inline-argument, environment, and
+interactive passwords are inherently bounded by the operating system's
+argument/environment limits and the terminal, `--password-file` is bounded by
+the 1 MiB read cap above, and the length-prefixed secret encoding (§4.2)
+accommodates any resulting length.
 
 ### 6.5 Output defaults
 
