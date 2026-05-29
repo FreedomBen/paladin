@@ -4,3 +4,7 @@
 //! never reads argv, never prompts, never touches the filesystem on its own,
 //! never decides whether to overwrite, and never exits the process. See
 //! `DESIGN.md` for the authoritative specification.
+
+mod error;
+
+pub use error::{Result, SymError};
