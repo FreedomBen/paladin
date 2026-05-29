@@ -273,8 +273,8 @@ key (32 bytes) = KDF(secret_input, salt, params)
   password yields different keys with overwhelming probability — so AEAD keys
   are not reused across files unless the RNG fails or repeats a salt.
 
-**Keyfiles (v1).** A keyfile is read in full as raw bytes (must be 1..=1 MiB to
-bound memory; an empty or larger keyfile is a usage error, exit 2), combined
+**Keyfiles (v1).** A keyfile is read in full as raw bytes (must be 1 byte..=1 MiB
+to bound memory; an empty or larger keyfile is a usage error, exit 2), combined
 with the password as shown above, and zeroized after key derivation. With a
 nonempty password it is a second factor — an attacker needs *both* the password
 and the keyfile. In explicit keyfile-only mode (`--no-password -k`), the keyfile
@@ -384,8 +384,9 @@ bytes that contains no `/`, `\`, `:`, or NUL, no Unicode control character
 (U+0000–U+001F, U+007F, or U+0080–U+009F), and is neither `.` nor `..`
 (interior dots, as in `report.pdf`, are
 allowed). On encryption, front-ends derive it from the input path basename when
-`--name` is set, reject `--name` when the input is stdin, reject any non-UTF-8 or
-unsafe basename rather than sanitizing it, and never store directory components.
+`--name` is set, reject `--name` when the input is stdin, reject any non-UTF-8,
+unsafe, or over-long (>255-byte) basename as a usage error (exit 2) rather than
+sanitizing or truncating it, and never store directory components.
 On decryption, a stored `name` whose bytes are not valid UTF-8 is a malformed
 header (exit 4); a `name` that is valid UTF-8 but fails the basename rules above
 is ignored, and the output path is derived from the input path instead. A
@@ -425,7 +426,10 @@ encryption (§6.3). `chunk_size` is not user-settable in v1 — every new file i
 written with the 64 KiB default — but it is still range-checked on read so older
 or hand-crafted files are validated, and the `EncryptOptions.chunk_size` field is
 retained for forward compatibility and for tests that exercise multi-chunk
-streams on small inputs.
+streams on small inputs. `core::encrypt` range-checks `chunk_size` against the
+bounds above and rejects an out-of-range value before writing any output, so a
+programmatically constructed `EncryptOptions` (for example in tests) cannot
+produce a file that fails its own read validation.
 
 | Parameter            | Valid range / rule                                      |
 |----------------------|---------------------------------------------------------|
@@ -863,9 +867,9 @@ chosen for being pure-Rust and widely reviewed.
   and excessive KDF costs before allocation or key derivation, reporting them as
   `MalformedHeader` (exit 4); a non-UTF-8 stored name is likewise rejected, while
   a valid-UTF-8 but unsafe name is ignored in favor of input-path derivation.
-- Encrypt-option validation rejects an unsafe `--name`, mismatched KDF knobs,
-  and plaintext larger than the v1 size cap with `InputTooLarge` before any
-  output is finalized.
+- Encrypt-option validation rejects an unsafe or over-long `--name`, mismatched
+  KDF knobs, an out-of-range `chunk_size`, and plaintext larger than the v1 size
+  cap with `InputTooLarge` before any output is finalized.
 - Decrypt/verify size-cap enforcement rejects authenticated plaintext larger
   than the v1 size cap with `InputTooLarge`.
 - ASCII armor parser accepts LF/CRLF and surrounding whitespace, and rejects
