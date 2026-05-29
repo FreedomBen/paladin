@@ -1,2 +1,8 @@
 TODO.md
 .claude/settings.local.json
+
+# Rust build artifacts
+/target
+
+# Commit serialization lock (see CLAUDE.md)
+commit.lock

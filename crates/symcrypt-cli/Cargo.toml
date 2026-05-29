@@ -1,0 +1,17 @@
+[package]
+name = "symcrypt-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line front-end for symcrypt (binary: symcrypt)"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "symcrypt"
+path = "src/main.rs"
+
+[dependencies]

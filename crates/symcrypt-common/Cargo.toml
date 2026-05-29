@@ -1,0 +1,18 @@
+[package]
+name = "symcrypt-common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Terminal glue shared by the symcrypt CLI and TUI front-ends"
+
+[lints]
+workspace = true
+
+[dependencies]
+symcrypt-core = { path = "../symcrypt-core" }
+tempfile = "3.27.0"
+thiserror = "2.0.18"
+
+[dev-dependencies]
