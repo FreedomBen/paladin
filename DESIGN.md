@@ -1,12 +1,14 @@
 # symcrypt — Design
 
 **Status:** Design phase. No implementation yet.
-**Target stack:** Rust 1.94+, [gtk4-rs](https://gtk-rs.org/) (GTK 4.20).
+**Target stack:** Rust 1.94+, [relm4](https://relm4.org/) (gtk4-rs + libadwaita), [ratatui](https://ratatui.rs/).
 **Last updated:** 2026-05-29
 
-`symcrypt` is a simple, safe symmetric file encryption tool. It ships as a CLI
-(`symcrypt`) and a GTK4 desktop app (`symcrypt-gui`), both built on a shared
-core library. The default cipher is AES-256-GCM. Encrypted files begin with a
+`symcrypt` is a simple, safe symmetric file encryption tool. It ships as three
+**thin front-ends over one shared core library** — a scriptable CLI
+(`symcrypt`), an interactive terminal UI (`symcrypt-tui`), and a GTK desktop app
+(`symcrypt-gtk`, built with relm4) — all built on `symcrypt-core`, which does all
+the work. The default cipher is AES-256-GCM. Encrypted files begin with a
 self-describing, authenticated header so they can be identified and decrypted
 without out-of-band parameters (other than the password/keyfile).
 
@@ -20,14 +22,15 @@ without out-of-band parameters (other than the password/keyfile).
 4. [Cryptographic design](#4-cryptographic-design)
 5. [File format specification](#5-file-format-specification)
 6. [CLI specification](#6-cli-specification)
-7. [GTK application design](#7-gtk-application-design)
-8. [Dependencies](#8-dependencies)
-9. [Testing strategy](#9-testing-strategy)
-10. [Security considerations](#10-security-considerations)
-11. [Defaults summary](#11-defaults-summary)
-12. [Out of scope for v1](#12-out-of-scope-for-v1)
-13. [Open decisions](#13-open-decisions)
-14. [Implementation checklist](#14-implementation-checklist)
+7. [TUI application design](#7-tui-application-design)
+8. [GTK application design](#8-gtk-application-design)
+9. [Dependencies](#9-dependencies)
+10. [Testing strategy](#10-testing-strategy)
+11. [Security considerations](#11-security-considerations)
+12. [Defaults summary](#12-defaults-summary)
+13. [Out of scope for v1](#13-out-of-scope-for-v1)
+14. [Resolved decisions](#14-resolved-decisions)
+15. [Implementation checklist](#15-implementation-checklist)
 
 ---
 
@@ -41,7 +44,9 @@ without out-of-band parameters (other than the password/keyfile).
   header carry everything needed to decrypt (cipher, KDF, KDF params, salt,
   nonce, chunk size) — only the secret (password/keyfile) is external.
 - **Streaming**: encrypt/decrypt files of arbitrary size with bounded memory.
-- **Simple, scriptable CLI** plus an approachable GTK GUI sharing one core.
+- **Three thin front-ends, one core**: a scriptable CLI, an interactive TUI, and
+  a GTK desktop app, all calling the same library so behavior never diverges and
+  nothing is reimplemented per front-end.
 - **Strong, modern defaults** that a non-expert gets for free, with knobs for
   experts.
 
@@ -51,7 +56,7 @@ without out-of-band parameters (other than the password/keyfile).
 - Hiding *that* a file is a symcrypt file (the magic is intentionally
   identifiable) or hiding the approximate plaintext size.
 - Deniable encryption, hidden volumes, or secure erasure guarantees on modern
-  storage (see [§10](#10-security-considerations)).
+  storage (see [§11](#11-security-considerations)).
 - Compression (can be added later; compressing before encrypting has known
   side-channel caveats, so it stays off by default and out of v1).
 
@@ -59,11 +64,16 @@ without out-of-band parameters (other than the password/keyfile).
 
 ## 2. Architecture
 
-A Cargo **workspace** with three crates: a pure logic core plus two thin
-front-ends. The core performs no UI and no policy decisions (e.g. clobber
-prompts); it exposes streaming encrypt/decrypt over `Read`/`Write` and a header
-type. This keeps the security-critical code small, front-end-agnostic, and
-unit-testable.
+A Cargo **workspace** of five crates: the pure-logic `symcrypt-core`, the three
+thin front-ends (`symcrypt`, `symcrypt-tui`, `symcrypt-gtk`), and
+`symcrypt-common` — a small support crate of terminal glue shared by the CLI and
+TUI. **`symcrypt-core` does all the work**; the front-ends are just views that
+gather input, hand it to the core, and render the result. This keeps the
+security-critical code small, front-end-agnostic, and unit-testable, and
+guarantees the CLI, TUI, and GTK app behave identically because they share the
+same code path.
+
+### 2.1 Workspace layout
 
 ```
 symcrypt/
@@ -71,30 +81,123 @@ symcrypt/
 ├── DESIGN.md
 ├── README.md                  # (later)
 └── crates/
-    ├── symcrypt-core/         # library: format, crypto, KDF, streaming
+    ├── symcrypt-core/         # library — ALL crypto, format, streaming, pure helpers
     │   ├── src/
-    │   │   ├── lib.rs
+    │   │   ├── lib.rs          # public API: encrypt / decrypt / inspect / verify
     │   │   ├── error.rs        # SymError, Result
-    │   │   ├── header.rs       # serialize/parse, IDs, flags, params
-    │   │   ├── kdf.rs          # Argon2id / scrypt / PBKDF2 dispatch
+    │   │   ├── secret.rs       # Secret (password + optional keyfile), zeroized
+    │   │   ├── header.rs       # serialize / parse, IDs, flags, params
+    │   │   ├── kdf.rs          # Argon2id / scrypt / PBKDF2 dispatch + defaults
     │   │   ├── cipher.rs       # AEAD dispatch (AES-256-GCM, ChaCha20-Poly1305)
-    │   │   ├── stream.rs       # STREAM chunked encrypt/decrypt
-    │   │   └── armor.rs        # base64 ASCII-armor wrap/unwrap
+    │   │   ├── stream.rs       # STREAM chunked encrypt / decrypt
+    │   │   ├── armor.rs        # base64 ASCII-armor wrap / unwrap + detect
+    │   │   └── paths.rs        # default output-path helpers (pure, no I/O)
     │   └── tests/              # round-trip, tamper, KAT vectors
-    ├── symcrypt-cli/           # binary `symcrypt`
+    ├── symcrypt-common/        # library — terminal glue shared by CLI + TUI
+    │   └── src/lib.rs          # path-or-stdin I/O, clobber check, secure remove,
+    │                           #   password-source resolution, exit-code mapping
+    ├── symcrypt-cli/           # binary `symcrypt`      (thin front-end)
     │   └── src/main.rs
-    └── symcrypt-gui/           # binary `symcrypt-gui`
+    ├── symcrypt-tui/           # binary `symcrypt-tui`  (thin front-end, ratatui)
+    │   └── src/main.rs
+    └── symcrypt-gtk/           # binary `symcrypt-gtk`  (thin front-end, relm4 + libadwaita)
         └── src/main.rs
 ```
 
-**Data flow (encrypt):** front-end resolves the password → calls
-`core::encrypt(reader, writer, &Options)` → core derives key via KDF, writes the
-authenticated header, then STREAM-encrypts the body chunk by chunk, reporting
-progress via a callback.
+### 2.2 Design principle: thin front-ends
 
-**Data flow (decrypt):** front-end → `core::decrypt(reader, writer, secret)` →
-core parses + validates the header, re-derives the key, STREAM-decrypts,
-verifying each chunk's tag.
+Front-ends own only *medium-specific* concerns — capturing input and rendering
+output. Everything else lives in the core, including pure helpers (output-path
+derivation, cipher/KDF name parsing, defaults) so even those are written once.
+
+| Concern                                                   | `symcrypt-core` | Front-ends |
+|-----------------------------------------------------------|:---------------:|:----------:|
+| AEAD, KDF, RNG, key derivation                            | ✓               |            |
+| File format: header, chunk framing, armor                 | ✓               |            |
+| Streaming loop, nonce derivation, tamper/auth checks      | ✓               |            |
+| `Secret` assembly (password + keyfile) and zeroization    | ✓               |            |
+| Default output-path / extension logic                     | ✓ (pure helper) | call it    |
+| Cipher/KDF name parsing, display, and default params      | ✓               | call it    |
+| Header inspection for `--info`                            | ✓               | call it    |
+| Parsing args / drawing widgets / reading keypresses       |                 | ✓          |
+| Acquiring the password (prompt / file / env / entry)      |                 | ✓          |
+| Opening files or stdin/stdout, the clobber *decision*, `--remove` |         | ✓          |
+| Rendering progress, formatting errors, exit codes         |                 | ✓          |
+
+The core never reads argv, never prompts, never touches the filesystem on its
+own, never decides whether to overwrite, and never exits the process. It takes
+generic `Read`/`Write` and reports progress through a callback. The terminal glue
+shared by `symcrypt` and `symcrypt-tui` (open-path-or-stdin, clobber check,
+secure remove, password-source resolution, exit-code mapping) lives in the
+`symcrypt-common` crate so it is written once. `symcrypt-gtk` does not use it —
+it relies on the core plus GTK-native file handling.
+
+### 2.3 Core public API (sketch)
+
+```rust
+// ---- Inputs the front-ends assemble and hand to the core ----
+
+/// Password and/or keyfile material; zeroized on drop.
+pub struct Secret { /* … */ }
+impl Secret {
+    pub fn new(password: &[u8], keyfile: Option<&[u8]>) -> Self;
+}
+
+pub enum CipherId { Aes256Gcm, ChaCha20Poly1305 }   // FromStr / Display
+pub enum KdfId    { Argon2id, Scrypt, Pbkdf2 }       // FromStr / Display
+
+pub struct EncryptOptions {
+    pub cipher: CipherId,
+    pub kdf: KdfId,
+    pub kdf_params: KdfParams,
+    pub chunk_size: u32,
+    pub filename: Option<String>,  // Some(name) ⇒ store in header (--name)
+    pub armor: bool,
+}
+impl Default for EncryptOptions { /* secure defaults from §12 */ }
+
+/// Progress callback payload; returning Break aborts the operation.
+pub struct Progress { pub done: u64, pub total: Option<u64> }
+type OnProgress = dyn FnMut(Progress) -> std::ops::ControlFlow<()>;
+
+// ---- The four operations every front-end calls ----
+
+pub fn encrypt<R: Read, W: Write>(
+    input: R, output: W, secret: &Secret,
+    opts: &EncryptOptions, on_progress: &mut OnProgress,
+) -> Result<()>;
+
+pub fn decrypt<R: Read, W: Write>(
+    input: R, output: W, secret: &Secret,
+    on_progress: &mut OnProgress,
+) -> Result<()>;
+
+pub fn inspect<R: Read>(input: R) -> Result<Header>;       // powers --info
+pub fn verify<R: Read>(input: R, secret: &Secret,
+                       on_progress: &mut OnProgress) -> Result<()>;  // powers --verify
+
+// ---- Pure helpers shared by all front-ends (no I/O) ----
+
+pub fn default_encrypt_output(input: &Path, armor: bool) -> PathBuf;
+pub fn default_decrypt_output(input: &Path, header: &Header) -> PathBuf;
+```
+
+### 2.4 Data flow
+
+**Encrypt.** A front-end gathers options (args / keys / widgets), acquires the
+password in its own way, builds a `Secret` and `EncryptOptions`, opens the input
+as a `Read` and the output as a `Write`, then calls
+`core::encrypt(input, output, &secret, &opts, on_progress)`. The core derives the
+key, writes the authenticated header, and STREAM-encrypts the body, invoking
+`on_progress` per chunk. The front-end only renders progress and the result.
+
+**Decrypt.** Same shape: the front-end opens streams and calls `core::decrypt`;
+the core parses/validates the header, re-derives the key, and STREAM-decrypts,
+verifying every tag.
+
+**Info / verify.** `core::inspect(input)` returns header metadata for display;
+`core::verify(input, &secret, on_progress)` decrypts-and-discards to confirm
+integrity. Front-ends never parse the format themselves.
 
 ---
 
@@ -142,6 +245,14 @@ key (32 bytes) = KDF(secret, salt, params)
 - `params` are stored in the header so decrypt re-derives the identical key.
 - Because the salt is random per file, encrypting two files with the same
   password yields different keys — so AEAD keys are never reused across files.
+
+**Keyfiles (v1).** A keyfile is read in full as raw bytes, combined with the
+password as shown above, and zeroized after key derivation. It is a second
+factor — an attacker needs *both* the password and the keyfile. Advisory flag
+bit1 is set when a keyfile was used, so on decrypt a front-end can say "this file
+needs a keyfile" rather than only reporting an auth failure when `-k` is missing.
+Keyfile contents are never stored; losing the keyfile means the file cannot be
+decrypted.
 
 ### 4.3 Streaming AEAD (the STREAM construction)
 
@@ -229,11 +340,11 @@ optional `name` field, i.e. everything before the body.
 
 The three `kdf_p*` u32 fields are interpreted per `kdf_id`:
 
-| KDF      | `kdf_p1`         | `kdf_p2` | `kdf_p3`      |
-|----------|------------------|----------|---------------|
-| Argon2id | memory cost, KiB | time cost (passes) | parallelism (lanes) |
-| scrypt   | log₂(N)          | r        | p             |
-| PBKDF2   | iterations       | 0 (reserved) | 0 (reserved) — PRF fixed at HMAC-SHA256 |
+| KDF      | `kdf_p1`         | `kdf_p2`           | `kdf_p3`                                |
+|----------|------------------|--------------------|-----------------------------------------|
+| Argon2id | memory cost, KiB | time cost (passes) | parallelism (lanes)                     |
+| scrypt   | log₂(N)          | r                  | p                                       |
+| PBKDF2   | iterations       | 0 (reserved)       | 0 (reserved) — PRF fixed at HMAC-SHA256 |
 
 ### 5.5 Body / chunk layout
 
@@ -265,9 +376,25 @@ Decrypt auto-detects armor by the `-----BEGIN SYMCRYPT MESSAGE-----` line and
 strips it before parsing the binary header. Armor is purely an outer transport
 encoding; it is not represented in the binary header.
 
+### 5.7 Versioning & forward compatibility
+
+The `version` byte is checked first. An unknown `version`, `cipher_id`, or
+`kdf_id`, or any reserved `flags` bit set, is rejected with a clear error (exit
+code 4) — symcrypt never guesses at an unrecognized format. New ciphers or KDFs
+take new IDs (with a version bump if the layout changes). Because every file
+stores its own KDF parameters, files remain decryptable as the *defaults* for
+new files evolve over time.
+
 ---
 
 ## 6. CLI specification
+
+`symcrypt` is the command-line front-end: a thin wrapper that parses arguments,
+resolves the password, opens streams, calls `symcrypt-core`, and maps results to
+exit codes. It contains no crypto or format logic. The flags below are also the
+shared vocabulary the TUI and GTK app expose through their own controls — cipher
+and KDF names, defaults, and output-path rules all come from core helpers, so
+all three front-ends stay identical.
 
 ### 6.1 Synopsis
 
@@ -291,7 +418,7 @@ Exactly one mode is required. `<FILE>` of `-` means **stdin**.
 | Flag                      | Applies to | Description                                                            |
 |---------------------------|------------|-----------------------------------------------------------------------|
 | `-o, --output <FILE>`     | enc/dec    | Output path; `-` = stdout. Defaults in §6.4.                            |
-| `-p, --password <PW>`     | enc/dec/verify | Password inline (**discouraged**, see §10).                       |
+| `-p, --password <PW>`     | enc/dec/verify | Password inline (**discouraged**, see §11).                       |
 | `--password-file <FILE>`  | enc/dec/verify | Read password from a file (trailing newline trimmed).             |
 | `--password-env <VAR>`    | enc/dec/verify | Read password from an environment variable.                       |
 | `-k, --keyfile <FILE>`    | enc/dec/verify | Keyfile as a second factor (combined with password).              |
@@ -336,6 +463,12 @@ source is used; a keyfile alone (empty password) is permitted.
 | 3    | Authentication failure (wrong password or tampered file) |
 | 4    | Unsupported format or version                    |
 
+These codes map directly from `symcrypt-core`'s `SymError` variants — the
+front-end classifies nothing itself: `Auth` → 3; `UnsupportedVersion` /
+`UnknownCipher` / `UnknownKdf` → 4; `Io` and the like → 1; argument/usage
+problems caught before the core is called → 2. The mapping lives in
+`symcrypt-common` and is shared by the CLI and TUI.
+
 ### 6.7 Examples
 
 ```sh
@@ -349,52 +482,123 @@ symcrypt -e big.iso -c chacha20-poly1305 --remove
 
 ---
 
-## 7. GTK application design
+## 7. TUI application design
 
-**Toolkit:** gtk4-rs (the `gtk4` crate). [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/)
-is optional for modern GNOME styling; v1 may use plain GTK4 to minimize
-dependencies. The GUI links the same `symcrypt-core`.
+**Binary:** `symcrypt-tui`. **Toolkit:** [ratatui](https://ratatui.rs/) for
+widgets/layout + [crossterm](https://docs.rs/crossterm) for the terminal backend
+(raw mode, key and resize events). Like the other front-ends it is a thin view
+over `symcrypt-core` (reusing `symcrypt-common` for the terminal glue) and holds
+no crypto or format logic — it builds the same `Secret`/`EncryptOptions` and
+calls the same four core functions.
 
-### 7.1 Window layout
+### 7.1 Layout & flow
 
-- **Mode switch:** Encrypt / Decrypt (a `ViewSwitcher`/toggle).
-- **Input file:** chooser button + drag-and-drop target on the window.
-- **Output file:** chooser, prefilled with the default name (§6.5); editable.
-- **Password:** masked `PasswordEntry` with show/hide; in Encrypt mode a second
-  "confirm" field that must match before the action enables.
-- **Advanced (collapsible):** cipher dropdown, KDF dropdown + cost knobs,
-  "store original filename" and "armor output" checkboxes.
-- **Action button:** "Encrypt" / "Decrypt".
-- **Progress bar + status label**; non-blocking error dialogs.
-- **Info action:** pick an encrypted file → show header metadata in a dialog.
+A single full-screen form, navigable entirely by keyboard:
 
-### 7.2 Threading model
+- **Mode tabs:** Encrypt / Decrypt / Info.
+- **Input path** field (plain text entry for v1; a built-in file-browser popup
+  is a post-v1 enhancement).
+- **Output path** field, prefilled from `core::default_*_output` (§6.5);
+  editable.
+- **Password** field (masked, captured inside the event loop) plus a **confirm**
+  field shown only in Encrypt mode, with a show/hide toggle.
+- **Advanced** (collapsible): cipher and KDF selectors, `--name` and armor
+  toggles, keyfile path, KDF cost knobs.
+- **Progress gauge** + status line during an operation.
+- **Footer** key hints (Tab/Shift-Tab to move, Enter to run, Esc to cancel/quit,
+  `?` for help).
 
-Crypto runs **off the main thread** (`gio::spawn_blocking` or a `std::thread`),
-streaming through the core. Progress and completion are marshaled back to the UI
-via a `glib` channel / `MainContext` so the window stays responsive and
-cancelable. The password is moved into the worker and zeroized when done.
+Optionally launch with a path (`symcrypt-tui <file>`) to prefill the input
+field.
+
+### 7.2 Concurrency & cancellation
+
+The ratatui event loop stays on the main thread; the crypto call runs on a
+worker thread. `Progress` updates are sent over an `mpsc` channel that the UI
+drains each tick to redraw the gauge. Esc requests cancellation — the worker's
+`on_progress` callback returns `ControlFlow::Break`, and the core aborts cleanly
+and removes any partial output. The password lives in a zeroizing buffer moved
+into the worker.
+
+Note: password capture happens in the TUI's own masked field (under crossterm
+raw mode), not `rpassword`, which would conflict with raw mode.
 
 ---
 
-## 8. Dependencies
+## 8. GTK application design
 
-| Crate                         | Used in | Purpose                                  |
-|-------------------------------|---------|------------------------------------------|
-| `aes-gcm`                     | core    | AES-256-GCM AEAD                         |
-| `chacha20poly1305`            | core    | ChaCha20-Poly1305 AEAD                   |
-| `argon2`                      | core    | Argon2id KDF                             |
-| `scrypt`                      | core    | scrypt KDF                               |
-| `pbkdf2` + `sha2`             | core    | PBKDF2-HMAC-SHA256 KDF                   |
-| `rand` / `getrandom`          | core    | CSPRNG for salt + nonce prefix          |
-| `zeroize`                     | core    | Wipe key material from memory           |
-| `base64`                      | core    | ASCII armor                             |
-| `thiserror`                   | core    | Typed errors                            |
-| `clap` (derive)               | cli     | Argument parsing                        |
-| `rpassword`                   | cli     | No-echo password prompt                 |
-| `anyhow`                      | cli     | Error reporting / context               |
-| `indicatif`                   | cli     | Progress bar                            |
-| `gtk4` (+ optional `libadwaita`) | gui  | GUI toolkit                             |
+**Binary:** `symcrypt-gtk`. **Framework:** [relm4](https://relm4.org/) — an
+Elm-architecture layer over gtk4-rs — with
+[libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/) for modern GNOME
+styling and `relm4-components` for ready-made helpers. Like the CLI and TUI it
+is a thin front-end and links the same `symcrypt-core`; it holds no crypto or
+format logic.
+
+### 8.1 Component model
+
+relm4 structures the app as the Elm triad: a `Model` (UI state), `Input`
+messages (user/UI events), and a declarative `view!`. `AppModel` holds the
+selected mode, input/output paths, password + confirm, advanced options (cipher,
+KDF, cost knobs, keyfile, `--name`, armor), and run status/progress. UI events
+become `Input` messages — `SetInputFile`, `PickOutput`, `SetPassword`,
+`SetKeyfile`, `ToggleAdvanced`, `Run`, `Cancel` — handled in `update`, which
+mutates the model and re-renders. The model never calls crypto directly; it
+builds a `Secret` + `EncryptOptions` and invokes the core.
+
+### 8.2 Widgets (libadwaita)
+
+- `adw::ApplicationWindow` + `adw::ToolbarView` / `adw::HeaderBar`.
+- `adw::ViewStack` + `ViewSwitcher` for the Encrypt / Decrypt / Info modes.
+- `adw::EntryRow` for paths, each with a "browse" button opening
+  `gtk::FileDialog`; output prefilled from `core::default_*_output` (§6.5).
+- `adw::PasswordEntryRow` for the password (+ a confirm row in Encrypt mode) and
+  a keyfile chooser row (`-k`).
+- `adw::PreferencesGroup` + `adw::ExpanderRow` for the collapsible Advanced
+  section.
+- `gtk::ProgressBar` + `adw::ToastOverlay` for progress and status/errors.
+- `gtk::DropTarget` on the window for drag-and-drop of an input file.
+
+### 8.3 Concurrency & cancellation
+
+The crypto call must not block the GTK main loop, so it runs as a relm4
+**`Command`** (background task via `spawn_blocking`) or a `Worker` on its own
+thread. It streams `Progress` back as `CommandOutput` messages that `update_cmd`
+applies to the progress bar; success or failure arrives as a final message shown
+via an `adw::Toast` or error dialog. Cancellation uses the command's shutdown
+handle (a shared `AtomicBool`) — the core's `on_progress` callback observes it
+and returns `ControlFlow::Break`, and any partial output is removed. The password
+is moved into the worker in a zeroizing buffer.
+
+---
+
+## 9. Dependencies
+
+| Crate                          | Used in        | Purpose                                  |
+|--------------------------------|----------------|------------------------------------------|
+| `aes-gcm`                      | core           | AES-256-GCM AEAD                         |
+| `chacha20poly1305`             | core           | ChaCha20-Poly1305 AEAD                   |
+| `argon2`                       | core           | Argon2id KDF                             |
+| `scrypt`                       | core           | scrypt KDF                               |
+| `pbkdf2` + `sha2`              | core           | PBKDF2-HMAC-SHA256 KDF                   |
+| `rand` / `getrandom`           | core           | CSPRNG for salt + nonce prefix          |
+| `zeroize`                      | core           | Wipe key material from memory           |
+| `base64`                       | core           | ASCII armor                             |
+| `thiserror`                    | core, common   | Typed errors (`SymError`)                |
+| `clap` (derive)                | cli, tui¹      | Argument parsing                        |
+| `rpassword`                    | cli            | No-echo password prompt                 |
+| `indicatif`                    | cli            | Progress bar                            |
+| `ratatui`                      | tui            | Terminal UI widgets/layout              |
+| `crossterm`                    | tui            | Terminal backend, raw mode, key events  |
+| `relm4` + `relm4-components`   | gtk            | GUI framework over gtk4-rs (Elm arch.)²  |
+| `anyhow`                       | cli, tui, gtk  | Error reporting / context               |
+
+¹ The TUI uses `clap` only for an optional launch path; all interaction happens
+in the UI, and password input is captured in its own masked field (not
+`rpassword`).
+
+² relm4 builds on gtk4-rs and pairs with libadwaita for styling;
+`relm4-components` supplies file-dialog and worker helpers. `symcrypt-common`
+depends only on `symcrypt-core` and the standard library (plus `thiserror`).
 
 Exact versions are pinned at scaffolding time via `cargo add` (latest
 compatible). RustCrypto crates are chosen for being pure-Rust and widely
@@ -402,7 +606,7 @@ reviewed.
 
 ---
 
-## 9. Testing strategy
+## 10. Testing strategy
 
 **Core unit tests**
 
@@ -410,6 +614,8 @@ reviewed.
   params → different key.
 - Header serialize → parse round-trip for every cipher/KDF/flag combination.
 - STREAM nonce derivation: counter increments, final flag placement.
+- Pure helpers: `default_encrypt_output` / `default_decrypt_output` and
+  cipher/KDF `FromStr`/`Display` round-trips.
 
 **Round-trip** (parameterized over sizes: 0, 1, `chunk_size−1`, `chunk_size`,
 `chunk_size+1`, several MiB): encrypt then decrypt reproduces the input exactly,
@@ -427,15 +633,20 @@ for each cipher and KDF.
 **Known-answer vectors:** commit fixed encrypted blobs to catch accidental
 format changes across versions.
 
-**CLI integration** (`assert_cmd` + `tempfile`): default-extension behavior,
-`-o -` / stdin, armor round-trip, `--info` output, clobber refusal vs `-f`,
-exit codes, password via file/env.
+**Front-end tests.** Because the front-ends are thin, most coverage lives in
+core. `symcrypt` gets CLI integration tests (`assert_cmd` + `tempfile`):
+default-extension behavior, `-o -` / stdin, armor round-trip, `--info` output,
+clobber refusal vs `-f`, exit codes, password via file/env. The `symcrypt-common`
+glue (path-or-stdin opening, clobber check, secure remove, password-source
+precedence, exit-code mapping) is unit-tested directly. `symcrypt-tui` gets light
+tests of its non-UI glue; headless GTK testing is limited, so `symcrypt-gtk`
+relies on manual verification plus the shared core/helper tests.
 
 Per repo convention, tests accompany every code change.
 
 ---
 
-## 10. Security considerations
+## 11. Security considerations
 
 - **`-p <password>` leaks** the password to `ps`, shell history, and process
   listings. The help text marks it discouraged; prefer prompting,
@@ -452,6 +663,8 @@ Per repo convention, tests accompany every code change.
   per-chunk counter/final-flag nonce means no `(key, nonce)` pair repeats.
 - **Header downgrade/tamper** is prevented by authenticating the full header as
   AAD.
+- **Keyfiles** add a second factor but are read into process memory; they are
+  zeroized after key derivation, and their loss is unrecoverable.
 - **Memory hygiene:** keys and derived buffers are wrapped in `zeroize` types and
   wiped on drop. We cannot prevent the OS from paging secrets to swap.
 - **KDF defaults** target meaningful offline-guessing cost on commodity hardware
@@ -459,11 +672,11 @@ Per repo convention, tests accompany every code change.
   per file so old files still decrypt.
 
 Per repo policy, these implications are flagged for confirmation before
-implementation begins, and tests in §9 verify each integrity property.
+implementation begins, and tests in §10 verify each integrity property.
 
 ---
 
-## 11. Defaults summary
+## 12. Defaults summary
 
 | Parameter            | Default                         |
 |----------------------|---------------------------------|
@@ -483,7 +696,7 @@ implementation begins, and tests in §9 verify each integrity property.
 
 ---
 
-## 12. Out of scope for v1
+## 13. Out of scope for v1
 
 Asymmetric crypto, compression, plaintext padding / size hiding, key files
 managed by a keyring/agent, multi-recipient files, and HKDF-based per-file
@@ -492,34 +705,48 @@ HKDF separation is a possible hardening later).
 
 ---
 
-## 13. Open decisions
+## 14. Resolved decisions
 
-These are decided with sensible defaults above but flagged for confirmation:
+All open questions are now settled:
 
-- [ ] Keyfile support in v1, or defer to v1.1? (Currently specified, marked
-      advisory via flag bit1.)
-- [ ] GUI: plain GTK4 vs. libadwaita for v1 styling.
-- [ ] Default Argon2id parallelism (1 chosen for determinism/portability).
-- [ ] Whether `--info` and `--verify` ship in v1 or follow encrypt/decrypt.
+- [x] **Keyfile in v1.** Yes — keyfiles ship in the initial version (§4.2, §6).
+- [x] **GTK framework.** Use **relm4** (Elm architecture over gtk4-rs) with
+      libadwaita styling (§8), superseding the earlier plain-GTK4 vs. libadwaita
+      question.
+- [x] **Argon2id parallelism default.** Keep **1 lane** (deterministic and
+      portable; §12).
+- [x] **`--info` and `--verify` in v1.** Yes — both ship in v1 (§6.2).
+- [x] **Shared terminal glue.** Use a dedicated **`symcrypt-common`** crate for
+      the CLI+TUI glue (§2) so nothing is reimplemented.
+- [x] **TUI file selection.** Plain **path entry** for v1; a built-in
+      file-browser popup is a post-v1 enhancement (§7.1).
 
 ---
 
-## 14. Implementation checklist
+## 15. Implementation checklist
 
-- [ ] Scaffold Cargo workspace + three crates; pin dependencies.
+- [ ] Scaffold Cargo workspace + five crates; pin dependencies.
 - [ ] `core`: error types (`SymError`, `Result`).
+- [ ] `core`: `Secret` (password + keyfile) with zeroization.
 - [ ] `core`: cipher dispatch (AES-256-GCM, ChaCha20-Poly1305).
-- [ ] `core`: KDF dispatch (Argon2id, scrypt, PBKDF2) + param encoding.
-- [ ] `core`: header serialize / parse (+ optional filename, flags).
-- [ ] `core`: STREAM chunked encrypt/decrypt with progress callback.
+- [ ] `core`: KDF dispatch (Argon2id, scrypt, PBKDF2) + param encoding + defaults.
+- [ ] `core`: header serialize / parse (+ optional filename, flags, versioning).
+- [ ] `core`: STREAM chunked encrypt/decrypt with progress + cancellation.
 - [ ] `core`: ASCII armor wrap/unwrap + auto-detect.
+- [ ] `core`: pure helpers — default output paths, cipher/KDF name parsing.
 - [ ] `core`: unit, round-trip, tamper, and KAT tests.
-- [ ] `cli`: arg parsing (clap) and mode dispatch.
-- [ ] `cli`: password resolution (flag/file/env/prompt + confirm) and keyfile.
-- [ ] `cli`: encrypt / decrypt / info / verify; output defaults; clobber; remove.
-- [ ] `cli`: progress bar; verbosity; exit codes.
-- [ ] `cli`: integration tests.
-- [ ] `gui`: window, widgets, file chooser, drag-and-drop.
-- [ ] `gui`: worker thread + progress marshaling; encrypt/decrypt/info flows.
-- [ ] Docs: README, `--help` text, man page; `.desktop` file for the GUI.
-- [ ] Packaging: `cargo install` for the CLI; build/run notes for the GUI.
+- [ ] `symcrypt-common`: path-or-stdin I/O, clobber check, secure remove, password-source resolution, exit-code mapping (+ unit tests).
+- [ ] `symcrypt` (cli): arg parsing (clap) and mode dispatch.
+- [ ] `symcrypt` (cli): password resolution (flag/file/env/prompt + confirm) and keyfile.
+- [ ] `symcrypt` (cli): encrypt/decrypt/info/verify; output defaults; clobber; remove.
+- [ ] `symcrypt` (cli): progress bar; verbosity; exit codes.
+- [ ] `symcrypt` (cli): integration tests.
+- [ ] `symcrypt-tui`: ratatui/crossterm scaffold, event loop, form widgets.
+- [ ] `symcrypt-tui`: masked password capture, advanced options, path prefill.
+- [ ] `symcrypt-tui`: worker thread + progress gauge + cancellation.
+- [ ] `symcrypt-gtk`: relm4 component (model/inputs/view), libadwaita widgets, `gtk::FileDialog`, drag-and-drop.
+- [ ] `symcrypt-gtk`: relm4 Command/Worker for off-thread crypto; progress + cancellation; encrypt/decrypt/info flows.
+- [ ] Docs: README, `--help` text, man pages; `.desktop` file for `symcrypt-gtk`.
+- [ ] Packaging: `cargo install` for `symcrypt`/`symcrypt-tui`; build/run notes for GTK (needs GTK4 + libadwaita dev libs).
+```
+
