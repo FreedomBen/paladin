@@ -6,5 +6,7 @@
 //! `DESIGN.md` for the authoritative specification.
 
 mod error;
+mod secret;
 
 pub use error::{Result, SymError};
+pub use secret::{Secret, KEYFILE_MAX_BYTES};
