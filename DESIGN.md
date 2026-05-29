@@ -42,7 +42,7 @@ without out-of-band parameters (other than the password/keyfile).
   encryption (AEAD). Any tampering or corruption is detected on decrypt.
 - **Self-describing files**: a magic marker and a versioned, authenticated
   header carry everything needed to decrypt (cipher, KDF, KDF params, salt,
-  nonce, chunk size) — only the secret (password/keyfile) is external.
+  nonce prefix, chunk size) — only the secret (password/keyfile) is external.
 - **Streaming**: encrypt/decrypt files of arbitrary size with bounded memory.
 - **Three thin front-ends, one core**: a scriptable CLI, an interactive TUI, and
   a GTK desktop app, all calling the same library so behavior never diverges and
@@ -260,7 +260,8 @@ key (32 bytes) = KDF(secret_input, salt, params)
   password bytes and no keyfile bytes is an error.
 - `params` are stored in the header so decrypt re-derives the identical key.
 - Because the salt is random per file, encrypting two files with the same
-  password yields different keys — so AEAD keys are never reused across files.
+  password yields different keys with overwhelming probability — so AEAD keys
+  are not reused across files unless the RNG fails or repeats a salt.
 
 **Keyfiles (v1).** A keyfile is read in full as raw bytes, combined with the
 password as shown above, and zeroized after key derivation. With a nonempty
@@ -268,8 +269,11 @@ password it is a second factor — an attacker needs *both* the password and the
 keyfile. In explicit keyfile-only mode (`--no-password -k`), the keyfile is the
 only secret. Advisory flag bit1 is set when a keyfile was used, so on decrypt a
 front-end can say "this file needs a keyfile" rather than only reporting an auth
-failure when `-k` is missing. Keyfile contents are never stored; losing the
-keyfile means the file cannot be decrypted.
+failure when `-k` is missing. This bit is unauthenticated until decrypt/verify
+succeeds, so it is only a hint for diagnostics; it never bypasses tag
+verification, changes the exit code, or proves that a keyfile was required.
+Keyfile contents are never stored; losing the keyfile means the file cannot be
+decrypted.
 
 ### 4.3 Streaming AEAD (the STREAM construction)
 
@@ -295,8 +299,12 @@ nonce[11]     = final_flag     # 0x00 for normal chunks, 0x01 for the last chunk
   determines finality by reading one chunk ahead, and the only chunk encrypted
   with `final_flag = 1` is the genuine last one. Removing or adding a chunk
   flips an expected flag and fails authentication.
-- **Counter overflow:** refuse to encrypt a stream needing ≥ 2³² chunks
+- **Counter overflow:** refuse to encrypt a stream needing more than 2³² chunks
   (≈ 256 TiB at 64 KiB), which is far beyond practical inputs.
+- **v1 file-size cap:** refuse to encrypt plaintext larger than 64 GiB. This is
+  comfortably below the nonce counter limit and keeps AES-GCM usage within a
+  conservative per-key data bound. Larger-file support can later use explicit
+  segment keys or another reviewed construction.
 
 ### 4.4 Verification semantics
 
@@ -319,7 +327,8 @@ AEAD, and conflating them avoids leaking which one occurred.
 ```
 
 All multi-byte integers are **big-endian**. The header is *not* encrypted (it
-carries no secrets) but *is* authenticated via AAD during decrypt/verify.
+carries no secret key material, and any optional filename is visible) but *is*
+authenticated via AAD during decrypt/verify.
 `--info` can parse the header without a password, but cannot authenticate it.
 
 ### 5.2 Header fields
@@ -350,12 +359,14 @@ trusted as a path. A well-formed `name` is a single UTF-8 basename of 1..=255
 bytes that contains no `/`, `\`, `:`, NUL, or control character (any byte
 < 0x20), and is neither `.` nor `..` (interior dots, as in `report.pdf`, are
 allowed). On encryption, front-ends derive it from the input path basename when
-`--name` is set, reject `--name` when the input is stdin, and never store
-directory components. On decryption, a stored `name` whose bytes are not valid
-UTF-8 is a malformed header (exit 4); a `name` that is valid UTF-8 but fails the
-basename rules above is ignored, and the output path is derived from the input
-path instead. A well-formed stored name is used only as a relative filename in
-the chosen output directory or current directory.
+`--name` is set, reject `--name` when the input is stdin, reject any non-UTF-8 or
+unsafe basename rather than sanitizing it, and never store directory components.
+On decryption, a stored `name` whose bytes are not valid UTF-8 is a malformed
+header (exit 4); a `name` that is valid UTF-8 but fails the basename rules above
+is ignored, and the output path is derived from the input path instead. A
+well-formed stored name is used only as a relative filename. With file input and
+no `-o`, that relative filename is placed beside the input file; with stdin
+input, decrypt requires `-o` (§6.5).
 
 ### 5.3 Identifiers & flags
 
@@ -364,7 +375,9 @@ the chosen output directory or current directory.
 - **kdf_id:** `0x01` = Argon2id, `0x02` = scrypt, `0x03` = PBKDF2-HMAC-SHA256.
 - **flags:** bit0 (`0x01`) = original filename field present; bit1 (`0x02`) =
   keyfile was used (advisory, so decrypt can give a clearer error if the keyfile
-  is missing). Bits 2–7 reserved, must be 0.
+  is missing). Bit1 is unauthenticated until decrypt/verify succeeds and is
+  never used as an authorization or format decision. Bits 2–7 reserved, must be
+  0.
 
 ### 5.4 KDF parameter encoding
 
@@ -412,8 +425,9 @@ carries 0..=`chunk_size` plaintext bytes.
 The encryptor fills each chunk by reading up to `chunk_size` plaintext bytes,
 marking a chunk final (`final_flag = 1`) when no further input follows. The
 decryptor reads `chunk_size + 16` bytes at a time and buffers one chunk ahead so
-it can set `final_flag` correctly: a chunk is final iff no bytes follow it. The body must contain at least one chunk; an empty file produces exactly one
-final chunk of 16 bytes (tag only). A structurally malformed body — a trailing
+it can set `final_flag` correctly: a chunk is final iff no bytes follow it. The
+body must contain at least one chunk; an empty file produces exactly one final
+chunk of 16 bytes (tag only). A structurally malformed body — a trailing
 fragment shorter than the 16-byte tag, or no body at all — is reported as an
 authentication failure (exit 3), exactly like a wrong password or a flipped bit;
 truncation and tampering are deliberately indistinguishable (§4.4).
@@ -433,10 +447,15 @@ With `--armor`, the binary container is base64-encoded and wrapped:
 -----END SYMCRYPT MESSAGE-----
 ```
 
-Decrypt, verify, and info auto-detect armor by the
-`-----BEGIN SYMCRYPT MESSAGE-----` line and strip it before parsing the binary
-header. Armor is purely an outer transport encoding; it is not represented in
-the binary header.
+Encryption writes LF line endings, wraps base64 at exactly 64 columns, and
+emits no extra text before the begin marker or after the end marker. Decrypt,
+verify, and info auto-detect armor by the `-----BEGIN SYMCRYPT MESSAGE-----`
+line and strip it before parsing the binary header. They accept LF or CRLF line
+endings and surrounding whitespace, but require the exact begin/end marker
+lines once armor is detected. Extra non-whitespace outside the markers,
+non-base64 body content, or a missing end marker is malformed armor
+(`MalformedHeader`, exit 4). Armor is purely an outer transport encoding; it is
+not represented in the binary header.
 
 ### 5.7 Versioning & forward compatibility
 
@@ -508,19 +527,26 @@ Flags supplied for a mode they do not apply to (per the **Applies to** column)
 are usage errors (exit 2), not silently ignored — e.g. `-c/--cipher` or any KDF
 cost knob with `--decrypt`/`--info`/`--verify`, `-o/--output` with
 `--info`/`--verify`, or `-p/--password` with `--info`.
+KDF-specific cost knobs are also usage errors unless their matching `--kdf` is
+selected: Argon2id knobs require `--kdf argon2id` or the default KDF, scrypt
+knobs require `--kdf scrypt`, and PBKDF2 knobs require `--kdf pbkdf2`. Supplying
+`--scrypt-*` or `--pbkdf2-iterations` never implicitly changes the KDF.
 
 ### 6.4 Password input rules
 
-Exactly one of `-p`, `--password-file`, `--password-env`, or `--no-password` may
-be supplied. If none is supplied, the CLI uses an **interactive prompt** (no
-echo). On **encrypt**, an interactive prompt asks twice and must match.
+For modes that require a secret (Encrypt / Decrypt / Verify), exactly one of
+`-p`, `--password-file`, `--password-env`, or `--no-password` may be supplied. If
+none is supplied, the CLI uses an **interactive prompt** (no echo). On
+**encrypt**, an interactive prompt asks twice and must match.
 `--no-password` is valid only with `-k` and is the explicit keyfile-only mode.
 A keyfile (`-k`), if given, is always combined with whatever password source is
-used.
+used. The resolved secret must contain at least one byte of password or keyfile
+material; if both are empty, this is a usage error before the core is called.
 
 Password bytes are used exactly as provided; symcrypt does no Unicode
-normalization. CLI argv, environment variables, TUI fields, and GTK entries are
-encoded as UTF-8 bytes; non-UTF-8 argv or environment values are usage errors.
+normalization. Password text obtained from CLI argv, environment-variable
+values, TUI fields, and GTK entries is encoded as UTF-8 bytes; non-UTF-8
+password argv or environment values are usage errors.
 `--password-file` reads raw bytes and removes exactly one trailing LF or CRLF if
 present; no other whitespace is trimmed.
 
@@ -530,12 +556,14 @@ present; no other whitespace is trimmed.
 - **Decrypt, no `-o`:** use the stored filename if present and well-formed
   (§5.2); otherwise — no stored name, or one that fails the basename rules —
   strip `.symcrypt.asc`, then `.symcrypt`, then `.asc`; else append `.dec`.
-  Refuse to overwrite unless `-f`.
+  Stored names are written beside the input file. Refuse to overwrite unless
+  `-f`.
 - **Stdin input (`<FILE>` is `-`):** encrypt/decrypt require `-o`; `--remove` is
   rejected.
 - **File outputs:** write to a sibling temporary file, then rename it into place
-  only after success. Remove the temporary file on error, authentication
-  failure, or cancellation.
+  only after success. On Unix, create the temporary output with mode `0600`
+  (`rw-------`) and do not preserve source-file permissions in v1. Remove the
+  temporary file on error, authentication failure, or cancellation.
 - `-o -` writes to stdout (progress is then forced off; armor recommended for
   terminals). If stdout is used, partial output may already have been written
   before an error is detected.
@@ -548,7 +576,7 @@ present; no other whitespace is trimmed.
 | 1    | General error (I/O, etc.)                        |
 | 2    | Usage / argument error                           |
 | 3    | Authentication failure (wrong password or tampered file) |
-| 4    | Unsupported format or version                    |
+| 4    | Unsupported, unknown, or malformed format/header |
 | 130  | Canceled by the user                             |
 
 These codes map directly from `symcrypt-core`'s `SymError` variants — the
@@ -566,9 +594,12 @@ body too short to form a chunk (a trailing fragment under 16 bytes, or no body a
 all) is reported as `Auth` (exit 3), not distinguished from tampering (§4.4, §5.5).
 
 On SIGINT (Ctrl-C), the CLI installs a handler that flips the same cancellation
-flag the worker-thread front-ends use: the core's `on_progress` returns
-`ControlFlow::Break`, the operation returns `SymError::Canceled`, any temporary
-output is removed (§6.5), and the process exits 130.
+flag the worker-thread front-ends use. Cancellation is cooperative: the core
+checks before and after key derivation and between chunks, but a KDF call already
+running may finish before cancellation is observed. When cancellation is
+observed, the core's `on_progress` returns `ControlFlow::Break`, the operation
+returns `SymError::Canceled`, any temporary output is removed (§6.5), and the
+process exits 130.
 
 ### 6.7 Examples
 
@@ -620,10 +651,12 @@ field.
 The ratatui event loop stays on the main thread; the crypto call runs on a
 worker thread. `Progress` updates are sent over an `mpsc` channel that the UI
 drains each tick to redraw the gauge. Esc requests cancellation — the worker's
-`on_progress` callback returns `ControlFlow::Break`, the core returns
+`on_progress` callback returns `ControlFlow::Break` once the core observes the
+cancel flag before/after KDF work or between chunks, the core returns
 `SymError::Canceled`, and the front-end removes any temporary output it created
-and shows a non-error canceled state. The password lives in a zeroizing buffer
-moved into the worker.
+and shows a non-error canceled state. A KDF call already running may finish
+before cancellation takes effect. The password lives in a zeroizing buffer moved
+into the worker.
 
 Note: password capture happens in the TUI's own masked field (under crossterm
 raw mode), not `rpassword`, which would conflict with raw mode.
@@ -673,10 +706,12 @@ The crypto call must not block the GTK main loop, so it runs as a relm4
 thread. It streams `Progress` back as `CommandOutput` messages that `update_cmd`
 applies to the progress bar; success or failure arrives as a final message shown
 via an `adw::Toast` or error dialog. Cancellation uses the command's shutdown
-handle (a shared `AtomicBool`) — the core's `on_progress` callback observes it
-and returns `ControlFlow::Break`; the core returns `SymError::Canceled`, and the
-GTK worker removes any temporary output it created and shows a non-error
-canceled state. The password is moved into the worker in a zeroizing buffer.
+handle (a shared `AtomicBool`) — the core observes it before/after KDF work or
+between chunks, the `on_progress` callback returns `ControlFlow::Break`, the
+core returns `SymError::Canceled`, and the GTK worker removes any temporary
+output it created and shows a non-error canceled state. A KDF call already
+running may finish before cancellation takes effect. The password is moved into
+the worker in a zeroizing buffer.
 
 ---
 
@@ -700,6 +735,7 @@ canceled state. The password is moved into the worker in a zeroizing buffer.
 | `ratatui`                      | tui                | Terminal UI widgets/layout               |
 | `crossterm`                    | tui                | Terminal backend, raw mode, key events   |
 | `relm4` + `relm4-components`   | gtk                | GUI framework over gtk4-rs (Elm arch.)²  |
+| `libadwaita`                   | gtk                | GNOME widgets and styling                |
 | `anyhow`                       | cli, tui, gtk      | Error reporting / context                |
 
 ¹ The TUI uses `clap` only for an optional launch path; all interaction happens
@@ -711,9 +747,9 @@ in the UI, and password input is captured in its own masked field (not
 depends only on `symcrypt-core`, the standard library, `thiserror`, and
 `tempfile`.
 
-Exact versions are pinned at scaffolding time via `cargo add` (latest
-compatible). RustCrypto crates are chosen for being pure-Rust and widely
-reviewed.
+Version requirements are selected at scaffolding time via `cargo add` (latest
+compatible), and `Cargo.lock` pins the resolved versions. RustCrypto crates are
+chosen for being pure-Rust and widely reviewed.
 
 ---
 
@@ -730,6 +766,11 @@ reviewed.
   and excessive KDF costs before allocation or key derivation, reporting them as
   `MalformedHeader` (exit 4); a non-UTF-8 stored name is likewise rejected, while
   a valid-UTF-8 but unsafe name is ignored in favor of input-path derivation.
+- Encrypt-option validation rejects an unsafe `--name`, mismatched KDF knobs,
+  and plaintext larger than the v1 size cap before output finalization.
+- ASCII armor parser accepts LF/CRLF and surrounding whitespace, and rejects
+  extra non-whitespace outside the markers, invalid base64, and missing end
+  markers.
 - STREAM nonce derivation: counter increments, final flag placement.
 - Pure helpers: `default_encrypt_output` / `default_decrypt_output` and
   cipher/KDF `FromStr`/`Display` round-trips.
@@ -752,20 +793,23 @@ for each cipher and KDF.
   (exit 3), indistinguishable from tampering.
 
 **Known-answer vectors:** commit fixed encrypted blobs to catch accidental
-format changes across versions.
+format changes across versions. Vector generation uses a test-only deterministic
+salt/nonce-prefix source so fixtures are reproducible; production encryption
+always uses OS randomness.
 
 **Front-end tests.** Because the front-ends are thin, most coverage lives in
 core. `symcrypt` gets CLI integration tests (`assert_cmd` + `tempfile`):
 default-extension behavior, required `-o` for stdin encrypt/decrypt,
 `--remove` rejection with stdin, `-o -` / stdout, armor round-trip, `--info`
-output, `--verify` success/failure, clobber refusal vs `-f`, temp-file cleanup
-on failure/cancel, exit codes including 130 for cancellation, and password bytes
-via file/env/`--no-password`. The `symcrypt-common`
+output, `--verify` success/failure, clobber refusal vs `-f`, KDF-knob mismatch
+usage errors, temp-file cleanup and Unix `0600` output mode, exit codes
+including 130 for cancellation, and password bytes via
+file/env/`--no-password`. The `symcrypt-common`
 glue (path-or-stdin opening, clobber check, best-effort remove, password-source
-precedence, exit-code mapping, and temp-file finalization) is unit-tested
-directly. `symcrypt-tui` gets light tests of its non-UI glue; headless GTK
-testing is limited, so `symcrypt-gtk` relies on manual verification plus the
-shared core/helper tests.
+exclusivity/resolution, exit-code mapping, and temp-file finalization) is
+unit-tested directly. `symcrypt-tui` gets light tests of its non-UI glue;
+headless GTK testing is limited, so `symcrypt-gtk` relies on manual verification
+plus the shared core/helper tests.
 
 Per repo convention, tests accompany every code change.
 
@@ -780,9 +824,9 @@ Per repo convention, tests accompany every code change.
   filesystems, overwriting does not guarantee erasure. `--remove` does a plain
   delete and the help says so plainly — we will not pretend to "shred."
 - **Filenames/sizes can be sensitive.** Storing the original filename is opt-in
-  (`--name`) and stores only a sanitized basename. Approximate plaintext size
-  always leaks from ciphertext length; symcrypt does not pad. (Padding is a
-  possible future option.)
+  (`--name`) and stores only a well-formed basename. Approximate plaintext size
+  always leaks from ciphertext length; symcrypt does not pad. v1 refuses to
+  encrypt plaintext larger than 64 GiB. (Padding is a possible future option.)
 - **Wrong password vs. corruption** are indistinguishable by design and reported
   as one condition.
 - **Unauthenticated header data is bounded.** Header lengths and KDF parameters
@@ -791,6 +835,8 @@ Per repo convention, tests accompany every code change.
 - **Stdout output cannot be rolled back.** File outputs use temporary files and
   are finalized only after success, but stdout may already contain partial output
   if an operation fails late.
+- **File outputs are private by default.** On Unix, temporary output files are
+  created with mode `0600` and source-file permissions are not preserved in v1.
 - **Nonce reuse is structurally avoided:** a random per-file key (random salt) +
   per-chunk counter/final-flag nonce means no `(key, nonce)` pair repeats.
 - **Header downgrade/tamper** is prevented during decrypt/verify by
@@ -825,6 +871,7 @@ implementation begins, and tests in §10 verify each integrity property.
 | Salt length          | 16 bytes                        |
 | Nonce prefix         | 7 bytes (12-byte STREAM nonce)  |
 | Chunk size           | 65536 bytes (64 KiB)            |
+| Plaintext size cap   | 64 GiB                          |
 | Key length           | 32 bytes (256-bit)              |
 | Tag length           | 16 bytes (128-bit)              |
 | Output extension     | `.symcrypt` (`.symcrypt.asc` armored) |
@@ -833,7 +880,7 @@ implementation begins, and tests in §10 verify each integrity property.
 
 ## 13. Out of scope for v1
 
-Asymmetric crypto, compression, plaintext padding / size hiding, key files
+Asymmetric crypto, compression, plaintext padding / size hiding, keyfiles
 managed by a keyring/agent, multi-recipient files, special handling of Windows
 reserved device names (`CON`, `NUL`, …) in stored filenames, and HKDF-based
 per-file subkey separation (the random-salt-per-file design already prevents key
