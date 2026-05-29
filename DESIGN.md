@@ -168,7 +168,12 @@ pub struct EncryptOptions {
 }
 impl Default for EncryptOptions { /* secure defaults from §12 */ }
 
-/// Progress callback payload; returning Break aborts with SymError::Canceled.
+/// Progress callback payload. `done` is the running count of input bytes
+/// consumed so far; `total` echoes the caller's `input_len` — the input length
+/// when known (e.g. a regular file), or None when unknown (e.g. stdin).
+/// `input_len` is advisory for progress only; the §4.3 size cap is enforced
+/// from the bytes actually streamed, so a wrong hint never affects safety.
+/// Returning Break aborts with SymError::Canceled.
 pub struct Progress { pub done: u64, pub total: Option<u64> }
 type OnProgress = dyn FnMut(Progress) -> std::ops::ControlFlow<()>;
 
@@ -176,16 +181,16 @@ type OnProgress = dyn FnMut(Progress) -> std::ops::ControlFlow<()>;
 
 pub fn encrypt<R: Read, W: Write>(
     input: R, output: W, secret: &Secret,
-    opts: &EncryptOptions, on_progress: &mut OnProgress,
+    opts: &EncryptOptions, input_len: Option<u64>, on_progress: &mut OnProgress,
 ) -> Result<()>;
 
 pub fn decrypt<R: Read, W: Write>(
     input: R, output: W, secret: &Secret,
-    on_progress: &mut OnProgress,
+    input_len: Option<u64>, on_progress: &mut OnProgress,
 ) -> Result<()>;
 
 pub fn inspect<R: Read>(input: R) -> Result<Header>;       // powers --info (unauthenticated metadata)
-pub fn verify<R: Read>(input: R, secret: &Secret,
+pub fn verify<R: Read>(input: R, secret: &Secret, input_len: Option<u64>,
                        on_progress: &mut OnProgress) -> Result<()>;  // powers --verify
 
 // ---- Pure helpers shared by all front-ends (no I/O) ----
@@ -198,8 +203,9 @@ pub fn default_decrypt_output(input: &Path, header: &Header) -> PathBuf;
 
 **Encrypt.** A front-end gathers options (args / keys / widgets), acquires the
 password in its own way, builds a `Secret` and `EncryptOptions`, opens the input
-as a `Read` and the output as a `Write`, then calls
-`core::encrypt(input, output, &secret, &opts, on_progress)`. The core derives the
+as a `Read` and the output as a `Write`, determines `input_len` (the input's
+byte length from file metadata, or `None` for stdin), then calls
+`core::encrypt(input, output, &secret, &opts, input_len, on_progress)`. The core derives the
 key, writes the authenticated header, and STREAM-encrypts the body, invoking
 `on_progress` per chunk. The front-end only renders progress and the result.
 
@@ -208,7 +214,7 @@ the core parses/validates the header, re-derives the key, and STREAM-decrypts,
 verifying every tag.
 
 **Info / verify.** `core::inspect(input)` returns unauthenticated header
-metadata for display; `core::verify(input, &secret, on_progress)`
+metadata for display; `core::verify(input, &secret, input_len, on_progress)`
 decrypts-and-discards to confirm integrity. Front-ends never parse the format
 themselves.
 
@@ -360,7 +366,9 @@ authenticated via AAD during decrypt/verify.
 | …                 | `name_len`         | `name`             | UTF-8 **basename only** (path components stripped) |
 
 The "serialized header" used as AAD spans `magic` through the end of the
-optional `name` field, i.e. everything before the body.
+optional `name` field, i.e. everything before the body. `name_len` is a `u16`
+even though v1 caps names at 255 bytes; the wider field reserves headroom to
+raise the limit in a future version without changing the layout.
 
 When the filename flag is present, `name` is a display/output hint only — never
 trusted as a path. A well-formed `name` is a single UTF-8 basename of 1..=255
@@ -456,8 +464,9 @@ With `--armor`, the binary container is base64-encoded and wrapped:
 -----END SYMCRYPT MESSAGE-----
 ```
 
-Encryption writes LF line endings, wraps base64 at exactly 64 columns, and
-emits no extra text before the begin marker or after the end marker. Decrypt,
+Encryption uses standard base64 (RFC 4648 `+`/`/` alphabet, with `=` padding),
+writes LF line endings, wraps the base64 at exactly 64 columns, and emits no
+extra text before the begin marker or after the end marker. Decrypt,
 verify, and info auto-detect armor by the `-----BEGIN SYMCRYPT MESSAGE-----`
 line and strip it before parsing the binary header. They accept LF or CRLF line
 endings and surrounding whitespace, but require the exact begin/end marker
@@ -569,6 +578,12 @@ twice and must match.
 A keyfile (`-k`), if given, is always combined with whatever password source is
 used. The resolved secret must contain at least one byte of password or keyfile
 material; if both are empty, this is a usage error before the core is called.
+An empty password is accepted **only** via `--no-password`: a `-p ''` argument,
+an empty or newline-only `--password-file`, a `--password-env` variable that is
+set but empty, or an empty interactive entry is a usage error (the encrypt
+prompt re-asks rather than accepting an empty passphrase). This keeps a
+misconfigured password source from silently downgrading a password-plus-keyfile
+setup to keyfile-only.
 `-k/--keyfile` requires a real file path; `-` is rejected so stdin remains
 reserved for the main input stream.
 
@@ -587,7 +602,11 @@ other whitespace is trimmed.
 - **Encrypt, no `-o`:** `<input>.symcrypt` (`.symcrypt.asc` if `--armor`).
 - **Decrypt, no `-o`:** use the stored filename if present and well-formed
   (§5.2); otherwise — no stored name, or one that fails the basename rules —
-  strip `.symcrypt.asc`, then `.symcrypt`, then `.asc`; else append `.dec`.
+  strip `.symcrypt.asc`, then `.symcrypt`, then `.asc`; else append `.dec`. If
+  stripping a recognized extension would leave an empty basename (an input named
+  exactly `.symcrypt`, `.asc`, or `.symcrypt.asc`), treat it as having no
+  recognizable extension and append `.dec` to the original basename instead
+  (e.g. `.symcrypt` → `.symcrypt.dec`).
   Stored names are written beside the input file. Refuse to overwrite unless
   `-f`.
 - **Output must differ from input:** if the resolved output path refers to the
@@ -595,7 +614,8 @@ other whitespace is trimmed.
   before any work begins — preventing the temp-file rename from clobbering the
   source and, with `--remove`, preventing deletion of the freshly written output.
 - **Stdin input (`<FILE>` is `-`):** encrypt/decrypt require `-o`; `--remove` is
-  rejected.
+  rejected. `--info` and `--verify` accept stdin and write no output file, so they
+  need no `-o`.
 - **File outputs:** write to a sibling temporary file, then rename it into place
   only after success. On Unix, create the temporary output with mode `0600`
   (`rw-------`) and do not preserve source-file permissions in v1. Remove the
@@ -815,7 +835,8 @@ chosen for being pure-Rust and widely reviewed.
   extra non-whitespace outside the markers, invalid base64, and missing end
   markers.
 - STREAM nonce derivation: counter increments, final flag placement.
-- Pure helpers: `default_encrypt_output` / `default_decrypt_output` and
+- Pure helpers: `default_encrypt_output` / `default_decrypt_output` (including
+  the empty-basename fallback, e.g. `.symcrypt` → `.symcrypt.dec`) and
   cipher/KDF `FromStr`/`Display` round-trips.
 
 **Round-trip** (parameterized over sizes: 0, 1, `chunk_size−1`, `chunk_size`,
@@ -849,7 +870,9 @@ fails after successful output finalization, output-equals-input refusal, `-o -`
 clobber refusal vs `-f`, KDF-knob mismatch usage errors, `-q`/`-v` and
 `--progress`/`--quiet` conflicts, rejection of `-` for `--password-file` and
 `-k/--keyfile`, password-file and keyfile size caps, zero-byte keyfile
-rejection, temp-file cleanup and Unix `0600` output mode, exit codes including
+rejection, rejection of empty-password sources (`-p ''`, empty `--password-file`,
+set-but-empty `--password-env`) except `--no-password`, temp-file cleanup and
+Unix `0600` output mode, exit codes including
 130 for cancellation, and password bytes via file/env/`--no-password`. The
 `symcrypt-common`
 glue (path-or-stdin opening, clobber check, best-effort remove, password-source
