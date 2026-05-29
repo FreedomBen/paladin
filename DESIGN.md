@@ -98,7 +98,7 @@ symcrypt/
     │   │   └── paths.rs        # default output-path helpers (pure, no I/O)
     │   └── tests/              # round-trip, tamper, KAT vectors
     ├── symcrypt-common/        # library — terminal glue shared by CLI + TUI
-    │   └── src/lib.rs          # path-or-stdin I/O, clobber check, secure remove,
+    │   └── src/lib.rs          # path-or-stdin I/O, clobber check, best-effort remove,
     │                           #   password-source resolution, exit-code mapping
     ├── symcrypt-cli/           # binary `symcrypt`      (thin front-end)
     │   └── src/main.rs
@@ -122,7 +122,7 @@ derivation, cipher/KDF name parsing, defaults) so even those are written once.
 | `Secret` assembly (password + keyfile) and zeroization    | ✓               |            |
 | Default output-path / extension logic                     | ✓ (pure helper) | call it    |
 | Cipher/KDF name parsing, display, and default params      | ✓               | call it    |
-| Header inspection for `--info`                            | ✓               | call it    |
+| Unauthenticated header inspection for `--info`            | ✓               | call it    |
 | Parsing args / drawing widgets / reading keypresses       |                 | ✓          |
 | Acquiring the password (prompt / file / env / entry)      |                 | ✓          |
 | Opening files or stdin/stdout, the clobber *decision*, `--remove` |         | ✓          |
@@ -132,9 +132,15 @@ The core never reads argv, never prompts, never touches the filesystem on its
 own, never decides whether to overwrite, and never exits the process. It takes
 generic `Read`/`Write` and reports progress through a callback. The terminal glue
 shared by `symcrypt` and `symcrypt-tui` (open-path-or-stdin, clobber check,
-secure remove, password-source resolution, exit-code mapping) lives in the
+best-effort remove, password-source resolution, exit-code mapping) lives in the
 `symcrypt-common` crate so it is written once. `symcrypt-gtk` does not use it —
 it relies on the core plus GTK-native file handling.
+
+For file outputs, front-ends write to a sibling temporary file and rename it to
+the requested output path only after the core call succeeds. Any error,
+authentication failure, or cancellation removes the temporary output. When the
+output is stdout, rollback is impossible; callers may receive partial plaintext
+or ciphertext before an error is detected.
 
 ### 2.3 Core public API (sketch)
 
@@ -144,7 +150,7 @@ it relies on the core plus GTK-native file handling.
 /// Password and/or keyfile material; zeroized on drop.
 pub struct Secret { /* … */ }
 impl Secret {
-    pub fn new(password: &[u8], keyfile: Option<&[u8]>) -> Self;
+    pub fn new(password: &[u8], keyfile: Option<&[u8]>) -> Result<Self>;
 }
 
 pub enum CipherId { Aes256Gcm, ChaCha20Poly1305 }   // FromStr / Display
@@ -160,7 +166,7 @@ pub struct EncryptOptions {
 }
 impl Default for EncryptOptions { /* secure defaults from §12 */ }
 
-/// Progress callback payload; returning Break aborts the operation.
+/// Progress callback payload; returning Break aborts with SymError::Canceled.
 pub struct Progress { pub done: u64, pub total: Option<u64> }
 type OnProgress = dyn FnMut(Progress) -> std::ops::ControlFlow<()>;
 
@@ -176,7 +182,7 @@ pub fn decrypt<R: Read, W: Write>(
     on_progress: &mut OnProgress,
 ) -> Result<()>;
 
-pub fn inspect<R: Read>(input: R) -> Result<Header>;       // powers --info
+pub fn inspect<R: Read>(input: R) -> Result<Header>;       // powers --info (unauthenticated metadata)
 pub fn verify<R: Read>(input: R, secret: &Secret,
                        on_progress: &mut OnProgress) -> Result<()>;  // powers --verify
 
@@ -199,9 +205,10 @@ key, writes the authenticated header, and STREAM-encrypts the body, invoking
 the core parses/validates the header, re-derives the key, and STREAM-decrypts,
 verifying every tag.
 
-**Info / verify.** `core::inspect(input)` returns header metadata for display;
-`core::verify(input, &secret, on_progress)` decrypts-and-discards to confirm
-integrity. Front-ends never parse the format themselves.
+**Info / verify.** `core::inspect(input)` returns unauthenticated header
+metadata for display; `core::verify(input, &secret, on_progress)`
+decrypts-and-discards to confirm integrity. Front-ends never parse the format
+themselves.
 
 ---
 
@@ -239,24 +246,28 @@ project (pure-Rust, widely reviewed). We do not roll our own crypto.
 ### 4.2 Key derivation
 
 ```
-key (32 bytes) = KDF(secret, salt, params)
+key (32 bytes) = KDF(secret_input, salt, params)
 ```
 
 - `salt` is 16 random bytes, fresh per file, stored in the header.
-- `secret` is the password bytes, or — if a keyfile is supplied —
-  `password_bytes ‖ 0x00 ‖ keyfile_bytes` (keyfile is the second factor; either
-  part may be empty but not both).
+- `secret_input` is a domain-separated, length-prefixed encoding:
+  `b"symcrypt secret v1\0" || u64be(password_len) || password_bytes ||
+  u64be(keyfile_len) || keyfile_bytes`, where `u64be` is an unsigned 64-bit
+  big-endian length. This avoids ambiguity between passwords and keyfile
+  contents. Each part may be empty, but not both; creating a `Secret` with no
+  password bytes and no keyfile bytes is an error.
 - `params` are stored in the header so decrypt re-derives the identical key.
 - Because the salt is random per file, encrypting two files with the same
   password yields different keys — so AEAD keys are never reused across files.
 
 **Keyfiles (v1).** A keyfile is read in full as raw bytes, combined with the
-password as shown above, and zeroized after key derivation. It is a second
-factor — an attacker needs *both* the password and the keyfile. Advisory flag
-bit1 is set when a keyfile was used, so on decrypt a front-end can say "this file
-needs a keyfile" rather than only reporting an auth failure when `-k` is missing.
-Keyfile contents are never stored; losing the keyfile means the file cannot be
-decrypted.
+password as shown above, and zeroized after key derivation. With a nonempty
+password it is a second factor — an attacker needs *both* the password and the
+keyfile. In explicit keyfile-only mode (`--no-password -k`), the keyfile is the
+only secret. Advisory flag bit1 is set when a keyfile was used, so on decrypt a
+front-end can say "this file needs a keyfile" rather than only reporting an auth
+failure when `-k` is missing. Keyfile contents are never stored; losing the
+keyfile means the file cannot be decrypted.
 
 ### 4.3 Streaming AEAD (the STREAM construction)
 
@@ -306,30 +317,38 @@ AEAD, and conflating them avoids leaking which one occurred.
 ```
 
 All multi-byte integers are **big-endian**. The header is *not* encrypted (it
-carries no secrets) but *is* authenticated via AAD.
+carries no secrets) but *is* authenticated via AAD during decrypt/verify.
+`--info` can parse the header without a password, but cannot authenticate it.
 
 ### 5.2 Header fields
 
-| Offset           | Size       | Field             | Notes                                            |
-|------------------|------------|-------------------|--------------------------------------------------|
-| 0                | 8          | `magic`           | ASCII `"SYMCRYPT"`                                |
-| 8                | 1          | `version`         | `0x01`                                            |
-| 9                | 1          | `cipher_id`       | `0x01` AES-256-GCM · `0x02` ChaCha20-Poly1305    |
-| 10               | 1          | `kdf_id`          | `0x01` Argon2id · `0x02` scrypt · `0x03` PBKDF2   |
-| 11               | 1          | `flags`           | bit0 filename-present · bit1 keyfile-used (hint)  |
-| 12               | 4          | `kdf_p1`          | u32, meaning per KDF (§5.4)                        |
-| 16               | 4          | `kdf_p2`          | u32                                               |
-| 20               | 4          | `kdf_p3`          | u32                                               |
-| 24               | 1          | `salt_len`        | bytes (default 16)                                |
-| 25               | `salt_len` | `salt`            | random                                            |
-| 25+`salt_len`    | 1          | `nonce_prefix_len`| bytes (default 7)                                 |
-| 26+`salt_len`    | `npfx_len` | `nonce_prefix`    | random                                            |
-| …                | 4          | `chunk_size`      | u32, plaintext bytes per chunk (default 65536)     |
-| … (if flags bit0)| 2          | `name_len`        | u16, 1..=65535                                     |
-| …                | `name_len` | `name`            | UTF-8 **basename only** (path components stripped) |
+| Offset            | Size               | Field              | Notes                                             |
+|-------------------|--------------------|--------------------|---------------------------------------------------|
+| 0                 | 8                  | `magic`            | ASCII `"SYMCRYPT"`                                |
+| 8                 | 1                  | `version`          | `0x01`                                            |
+| 9                 | 1                  | `cipher_id`        | `0x01` AES-256-GCM · `0x02` ChaCha20-Poly1305     |
+| 10                | 1                  | `kdf_id`           | `0x01` Argon2id · `0x02` scrypt · `0x03` PBKDF2   |
+| 11                | 1                  | `flags`            | bit0 filename-present · bit1 keyfile-used (hint)  |
+| 12                | 4                  | `kdf_p1`           | u32, meaning per KDF (§5.4)                       |
+| 16                | 4                  | `kdf_p2`           | u32                                               |
+| 20                | 4                  | `kdf_p3`           | u32                                               |
+| 24                | 1                  | `salt_len`         | bytes (default 16)                                |
+| 25                | `salt_len`         | `salt`             | random                                            |
+| 25+`salt_len`     | 1                  | `nonce_prefix_len` | bytes (default 7)                                 |
+| 26+`salt_len`     | `nonce_prefix_len` | `nonce_prefix`     | random                                            |
+| …                 | 4                  | `chunk_size`       | u32, plaintext bytes per chunk (default 65536)    |
+| … (if flags bit0) | 2                  | `name_len`         | u16, 1..=255                                      |
+| …                 | `name_len`         | `name`             | UTF-8 **basename only** (path components stripped) |
 
 The "serialized header" used as AAD spans `magic` through the end of the
 optional `name` field, i.e. everything before the body.
+
+When the filename flag is present, `name` is a display/output hint only. It must
+be a single UTF-8 basename of 1..=255 bytes, with no `/`, `\`, NUL, `.`, or `..`.
+Front-ends derive it from the input path basename when `--name` is set, reject
+`--name` when the input is stdin, and never store directory components.
+Decrypting with a stored name uses it only as a relative filename in the chosen
+output directory or current directory.
 
 ### 5.3 Identifiers & flags
 
@@ -350,6 +369,27 @@ The three `kdf_p*` u32 fields are interpreted per `kdf_id`:
 | scrypt   | log₂(N)          | r                  | p                                       |
 | PBKDF2   | iterations       | 0 (reserved)       | 0 (reserved) — PRF fixed at HMAC-SHA256 |
 
+Header values are unauthenticated until decrypt/verify succeeds, so parsers
+validate sizes and KDF costs before allocation or key derivation. Values outside
+these ranges are unsupported format errors (exit 4) when read from a file, and
+usage errors (exit 2) when supplied by the user for a new encryption.
+
+| Parameter            | Valid range / rule                                      |
+|----------------------|---------------------------------------------------------|
+| `salt_len`           | 16..=64 bytes; v1 encryption writes 16.                 |
+| `nonce_prefix_len`   | Exactly 7 bytes in v1.                                  |
+| `chunk_size`         | 4096..=16777216 bytes (4 KiB..=16 MiB).                 |
+| `name_len`           | 1..=255 bytes when the filename flag is set.            |
+| Argon2id memory      | 8192..=1048576 KiB (8 MiB..=1 GiB).                     |
+| Argon2id time        | 1..=10 passes.                                          |
+| Argon2id parallelism | 1..=16 lanes.                                           |
+| scrypt `log₂(N)`     | 10..=20, and `N = 2^log₂(N)`.                           |
+| scrypt `r`           | 1..=32.                                                 |
+| scrypt `p`           | 1..=16.                                                 |
+| scrypt memory cap    | `128 * N * r` must be <= 1 GiB.                         |
+| PBKDF2 iterations    | 10000..=10000000.                                       |
+| PBKDF2 reserved      | `kdf_p2 == 0` and `kdf_p3 == 0`.                        |
+
 ### 5.5 Body / chunk layout
 
 The body is a sequence of chunks. Each on-disk chunk is the AEAD output
@@ -359,7 +399,9 @@ carries 0..=`chunk_size` plaintext bytes.
 
 The decryptor reads `chunk_size + 16` bytes at a time and buffers one chunk
 ahead so it can set `final_flag` correctly: a chunk is final iff no bytes follow
-it. An empty file produces exactly one final chunk of 16 bytes (tag only).
+it. The body must contain at least one chunk; any chunk shorter than the 16-byte
+tag is malformed. An empty file produces exactly one final chunk of 16 bytes
+(tag only).
 
 **Size accounting.** `num_chunks = max(1, ceil(plaintext_len / chunk_size))`;
 `body_len = plaintext_len + 16 * num_chunks`. Example: a 200 000-byte file at 64
@@ -376,18 +418,19 @@ With `--armor`, the binary container is base64-encoded and wrapped:
 -----END SYMCRYPT MESSAGE-----
 ```
 
-Decrypt auto-detects armor by the `-----BEGIN SYMCRYPT MESSAGE-----` line and
-strips it before parsing the binary header. Armor is purely an outer transport
-encoding; it is not represented in the binary header.
+Decrypt, verify, and info auto-detect armor by the
+`-----BEGIN SYMCRYPT MESSAGE-----` line and strip it before parsing the binary
+header. Armor is purely an outer transport encoding; it is not represented in
+the binary header.
 
 ### 5.7 Versioning & forward compatibility
 
-The `version` byte is checked first. An unknown `version`, `cipher_id`, or
-`kdf_id`, or any reserved `flags` bit set, is rejected with a clear error (exit
-code 4) — symcrypt never guesses at an unrecognized format. New ciphers or KDFs
-take new IDs (with a version bump if the layout changes). Because every file
-stores its own KDF parameters, files remain decryptable as the *defaults* for
-new files evolve over time.
+The magic is checked first, then the `version` byte. An unknown `version`,
+`cipher_id`, or `kdf_id`, or any reserved `flags` bit set, is rejected with a
+clear error (exit code 4) — symcrypt never guesses at an unrecognized format.
+New ciphers or KDFs take new IDs (with a version bump if the layout changes).
+Because every file stores its own KDF parameters, files remain decryptable as
+the *defaults* for new files evolve over time.
 
 ---
 
@@ -414,48 +457,67 @@ Exactly one mode is required. `<FILE>` of `-` means **stdin**.
 |------------------|-------------------------------------------------------------------|
 | `-e, --encrypt`  | Encrypt `<FILE>` → output.                                         |
 | `-d, --decrypt`  | Decrypt `<FILE>` → output.                                         |
-| `-i, --info`     | Print header metadata (cipher, KDF + params, version, flags, chunk size) without decrypting. No password needed. |
+| `-i, --info`     | Print unauthenticated header metadata (cipher, KDF + params, version, flags, chunk size) without decrypting. No password needed. |
 | `--verify`       | Decrypt in memory to verify integrity + password, write nothing. Exit 0 if valid. |
 
 ### 6.3 Options
 
-| Flag                      | Applies to | Description                                                            |
-|---------------------------|------------|-----------------------------------------------------------------------|
-| `-o, --output <FILE>`     | enc/dec    | Output path; `-` = stdout. Defaults in §6.4.                            |
-| `-p, --password <PW>`     | enc/dec/verify | Password inline (**discouraged**, see §11).                       |
-| `--password-file <FILE>`  | enc/dec/verify | Read password from a file (trailing newline trimmed).             |
-| `--password-env <VAR>`    | enc/dec/verify | Read password from an environment variable.                       |
-| `-k, --keyfile <FILE>`    | enc/dec/verify | Keyfile as a second factor (combined with password).              |
-| `-c, --cipher <NAME>`     | encrypt    | `aes-256-gcm` (default) or `chacha20-poly1305`.                        |
-| `--kdf <NAME>`            | encrypt    | `argon2id` (default), `scrypt`, or `pbkdf2`.                           |
-| `--kdf-memory <KiB>`      | encrypt    | Argon2/scrypt memory cost.                                             |
-| `--kdf-time <N>`          | encrypt    | Argon2 passes / PBKDF2 iterations.                                     |
-| `--kdf-parallelism <N>`   | encrypt    | Argon2/scrypt parallelism.                                             |
-| `-a, --armor`             | encrypt    | ASCII-armored (base64) output. (Decrypt auto-detects.)                 |
-| `--name`                  | encrypt    | Store the original filename in the header (off by default; sensitive).|
-| `-f, --force`             | enc/dec    | Overwrite an existing output file (default: refuse).                   |
-| `--remove`                | enc/dec    | Best-effort delete the input after success (default: keep).            |
-| `--progress/--no-progress`| enc/dec    | Progress bar. Default: auto (on when stderr is a TTY).                  |
-| `-v, --verbose`           | all        | More diagnostics on stderr.                                            |
-| `-q, --quiet`             | all        | Suppress non-error output.                                             |
-| `-V, --version`           | —          | Print version.                                                         |
-| `-h, --help`              | —          | Print help.                                                            |
+| Flag                       | Applies to     | Description                                                           |
+|----------------------------|----------------|-----------------------------------------------------------------------|
+| `-o, --output <FILE>`      | enc/dec        | Output path; `-` = stdout. Defaults in §6.5.                          |
+| `-p, --password <PW>`      | enc/dec/verify | Password inline (**discouraged**, see §11).                           |
+| `--password-file <FILE>`   | enc/dec/verify | Read password from a file (trailing newline trimmed).                 |
+| `--password-env <VAR>`     | enc/dec/verify | Read password from an environment variable.                           |
+| `--no-password`            | enc/dec/verify | Use an empty password; valid only with `-k`.                          |
+| `-k, --keyfile <FILE>`     | enc/dec/verify | Keyfile material combined with the password source.                   |
+| `-c, --cipher <NAME>`      | encrypt        | `aes-256-gcm` (default) or `chacha20-poly1305`.                       |
+| `--kdf <NAME>`             | encrypt        | `argon2id` (default), `scrypt`, or `pbkdf2`.                          |
+| `--argon2-memory <KiB>`    | encrypt        | Argon2id memory cost.                                                 |
+| `--argon2-time <N>`        | encrypt        | Argon2id passes.                                                      |
+| `--argon2-parallelism <N>` | encrypt        | Argon2id lanes.                                                       |
+| `--scrypt-log-n <N>`       | encrypt        | scrypt log₂(N).                                                       |
+| `--scrypt-r <N>`           | encrypt        | scrypt block-size parameter `r`.                                      |
+| `--scrypt-p <N>`           | encrypt        | scrypt parallelization parameter `p`.                                 |
+| `--pbkdf2-iterations <N>`  | encrypt        | PBKDF2-HMAC-SHA256 iteration count.                                   |
+| `-a, --armor`              | encrypt        | ASCII-armored (base64) output. (Decrypt/verify/info auto-detect.)     |
+| `--name`                   | encrypt        | Store the original filename in the header (off by default; sensitive). |
+| `-f, --force`              | enc/dec        | Overwrite an existing output file (default: refuse).                  |
+| `--remove`                 | enc/dec        | Best-effort delete the input after success (default: keep).           |
+| `--progress/--no-progress` | enc/dec/verify | Progress bar. Default: auto (on when stderr is a TTY).                |
+| `-v, --verbose`            | all            | More diagnostics on stderr.                                           |
+| `-q, --quiet`              | all            | Suppress non-error output.                                            |
+| `-V, --version`            | —              | Print version.                                                        |
+| `-h, --help`               | —              | Print help.                                                           |
 
-### 6.4 Password input precedence
+### 6.4 Password input rules
 
-Highest to lowest: `-p` → `--password-file` → `--password-env` → **interactive
-prompt** (no echo). On **encrypt**, an interactive prompt asks twice and must
-match. A keyfile (`-k`), if given, is always combined with whatever password
-source is used; a keyfile alone (empty password) is permitted.
+Exactly one of `-p`, `--password-file`, `--password-env`, or `--no-password` may
+be supplied. If none is supplied, the CLI uses an **interactive prompt** (no
+echo). On **encrypt**, an interactive prompt asks twice and must match.
+`--no-password` is valid only with `-k` and is the explicit keyfile-only mode.
+A keyfile (`-k`), if given, is always combined with whatever password source is
+used.
+
+Password bytes are used exactly as provided; symcrypt does no Unicode
+normalization. CLI argv, environment variables, TUI fields, and GTK entries are
+encoded as UTF-8 bytes; non-UTF-8 argv or environment values are usage errors.
+`--password-file` reads raw bytes and removes exactly one trailing LF or CRLF if
+present; no other whitespace is trimmed.
 
 ### 6.5 Output defaults
 
 - **Encrypt, no `-o`:** `<input>.symcrypt` (`.symcrypt.asc` if `--armor`).
-- **Decrypt, no `-o`:** use the stored filename if present; else strip a
-  trailing `.symcrypt`/`.asc`; else append `.dec`. Refuse to overwrite unless
-  `-f`.
+- **Decrypt, no `-o`:** use the stored filename if present; else strip
+  `.symcrypt.asc`, then `.symcrypt`, then `.asc`; else append `.dec`. Refuse to
+  overwrite unless `-f`.
+- **Stdin input (`<FILE>` is `-`):** encrypt/decrypt require `-o`; `--remove` is
+  rejected.
+- **File outputs:** write to a sibling temporary file, then rename it into place
+  only after success. Remove the temporary file on error, authentication
+  failure, or cancellation.
 - `-o -` writes to stdout (progress is then forced off; armor recommended for
-  terminals).
+  terminals). If stdout is used, partial output may already have been written
+  before an error is detected.
 
 ### 6.6 Exit codes
 
@@ -466,12 +528,14 @@ source is used; a keyfile alone (empty password) is permitted.
 | 2    | Usage / argument error                           |
 | 3    | Authentication failure (wrong password or tampered file) |
 | 4    | Unsupported format or version                    |
+| 130  | Canceled by the user                             |
 
 These codes map directly from `symcrypt-core`'s `SymError` variants — the
-front-end classifies nothing itself: `Auth` → 3; `UnsupportedVersion` /
-`UnknownCipher` / `UnknownKdf` → 4; `Io` and the like → 1; argument/usage
-problems caught before the core is called → 2. The mapping lives in
-`symcrypt-common` and is shared by the CLI and TUI.
+front-end classifies nothing itself: `Auth` → 3; `BadMagic` /
+`UnsupportedVersion` / `UnknownCipher` / `UnknownKdf` / `ReservedFlags` → 4;
+`Canceled` → 130; `Io` and the like → 1; argument/usage problems caught before
+the core is called → 2. The mapping lives in `symcrypt-common` and is shared by
+the CLI and TUI.
 
 ### 6.7 Examples
 
@@ -479,8 +543,9 @@ problems caught before the core is called → 2. The mapping lives in
 symcrypt -e report.pdf                      # → report.pdf.symcrypt (prompts for password)
 symcrypt -e report.pdf -o - --armor > out   # armored to stdout
 symcrypt -d report.pdf.symcrypt             # → report.pdf (or prompts/derives name)
-symcrypt -i report.pdf.symcrypt             # show header metadata
-echo -n secret | symcrypt -e - -o s.symcrypt --password-env PW
+symcrypt -i report.pdf.symcrypt             # show unauthenticated header metadata
+printf 'secret' | PW='passphrase' symcrypt -e - -o s.symcrypt --password-env PW
+symcrypt -e vault.tar -k usb.key --no-password
 symcrypt -e big.iso -c chacha20-poly1305 --remove
 ```
 
@@ -499,15 +564,17 @@ calls the same four core functions.
 
 A single full-screen form, navigable entirely by keyboard:
 
-- **Mode tabs:** Encrypt / Decrypt / Info.
+- **Mode tabs:** Encrypt / Decrypt / Info / Verify.
 - **Input path** field (plain text entry for v1; a built-in file-browser popup
   is a post-v1 enhancement).
-- **Output path** field, prefilled from `core::default_*_output` (§6.5);
-  editable.
-- **Password** field (masked, captured inside the event loop) plus a **confirm**
-  field shown only in Encrypt mode, with a show/hide toggle.
-- **Advanced** (collapsible): cipher and KDF selectors, `--name` and armor
-  toggles, keyfile path, KDF cost knobs.
+- **Output path** field, shown for Encrypt / Decrypt, prefilled from
+  `core::default_*_output` (§6.5), and editable.
+- **Password** field, shown for Encrypt / Decrypt / Verify (masked, captured
+  inside the event loop), plus a **confirm** field shown only in Encrypt mode,
+  a show/hide toggle, and a keyfile-only toggle equivalent to `--no-password`.
+- **Advanced** (collapsible): Encrypt-only cipher and KDF selectors, `--name`
+  and armor toggles, and KDF-specific cost knobs; keyfile path is available in
+  Encrypt / Decrypt / Verify.
 - **Progress gauge** + status line during an operation.
 - **Footer** key hints (Tab/Shift-Tab to move, Enter to run, Esc to cancel/quit,
   `?` for help).
@@ -520,9 +587,10 @@ field.
 The ratatui event loop stays on the main thread; the crypto call runs on a
 worker thread. `Progress` updates are sent over an `mpsc` channel that the UI
 drains each tick to redraw the gauge. Esc requests cancellation — the worker's
-`on_progress` callback returns `ControlFlow::Break`, and the core aborts cleanly
-and removes any partial output. The password lives in a zeroizing buffer moved
-into the worker.
+`on_progress` callback returns `ControlFlow::Break`, the core returns
+`SymError::Canceled`, and the front-end removes any temporary output it created
+and shows a non-error canceled state. The password lives in a zeroizing buffer
+moved into the worker.
 
 Note: password capture happens in the TUI's own masked field (under crossterm
 raw mode), not `rpassword`, which would conflict with raw mode.
@@ -542,21 +610,24 @@ format logic.
 
 relm4 structures the app as the Elm triad: a `Model` (UI state), `Input`
 messages (user/UI events), and a declarative `view!`. `AppModel` holds the
-selected mode, input/output paths, password + confirm, advanced options (cipher,
-KDF, cost knobs, keyfile, `--name`, armor), and run status/progress. UI events
-become `Input` messages — `SetInputFile`, `PickOutput`, `SetPassword`,
-`SetKeyfile`, `ToggleAdvanced`, `Run`, `Cancel` — handled in `update`, which
-mutates the model and re-renders. The model never calls crypto directly; it
-builds a `Secret` + `EncryptOptions` and invokes the core.
+selected mode, input/output paths, password + confirm, keyfile-only choice,
+advanced options (cipher, KDF, KDF-specific cost knobs, keyfile, `--name`,
+armor), and run status/progress. UI events become `Input` messages —
+`SetInputFile`, `PickOutput`, `SetPassword`, `SetKeyfile`, `ToggleAdvanced`,
+`Run`, `Cancel` — handled in `update`, which mutates the model and re-renders.
+The model never calls crypto directly; it builds a `Secret` + `EncryptOptions`
+and invokes the core.
 
 ### 8.2 Widgets (libadwaita)
 
 - `adw::ApplicationWindow` + `adw::ToolbarView` / `adw::HeaderBar`.
-- `adw::ViewStack` + `ViewSwitcher` for the Encrypt / Decrypt / Info modes.
+- `adw::ViewStack` + `ViewSwitcher` for the Encrypt / Decrypt / Info / Verify modes.
 - `adw::EntryRow` for paths, each with a "browse" button opening
-  `gtk::FileDialog`; output prefilled from `core::default_*_output` (§6.5).
-- `adw::PasswordEntryRow` for the password (+ a confirm row in Encrypt mode) and
-  a keyfile chooser row (`-k`).
+  `gtk::FileDialog`; the output row is shown only for Encrypt / Decrypt and is
+  prefilled from `core::default_*_output` (§6.5).
+- `adw::PasswordEntryRow` for the password in Encrypt / Decrypt / Verify modes
+  (+ a confirm row in Encrypt mode), a keyfile-only toggle equivalent to
+  `--no-password`, and a keyfile chooser row (`-k`).
 - `adw::PreferencesGroup` + `adw::ExpanderRow` for the collapsible Advanced
   section.
 - `gtk::ProgressBar` + `adw::ToastOverlay` for progress and status/errors.
@@ -570,31 +641,33 @@ thread. It streams `Progress` back as `CommandOutput` messages that `update_cmd`
 applies to the progress bar; success or failure arrives as a final message shown
 via an `adw::Toast` or error dialog. Cancellation uses the command's shutdown
 handle (a shared `AtomicBool`) — the core's `on_progress` callback observes it
-and returns `ControlFlow::Break`, and any partial output is removed. The password
-is moved into the worker in a zeroizing buffer.
+and returns `ControlFlow::Break`; the core returns `SymError::Canceled`, and the
+GTK worker removes any temporary output it created and shows a non-error
+canceled state. The password is moved into the worker in a zeroizing buffer.
 
 ---
 
 ## 9. Dependencies
 
-| Crate                          | Used in        | Purpose                                  |
-|--------------------------------|----------------|------------------------------------------|
-| `aes-gcm`                      | core           | AES-256-GCM AEAD                         |
-| `chacha20poly1305`             | core           | ChaCha20-Poly1305 AEAD                   |
-| `argon2`                       | core           | Argon2id KDF                             |
-| `scrypt`                       | core           | scrypt KDF                               |
-| `pbkdf2` + `sha2`              | core           | PBKDF2-HMAC-SHA256 KDF                   |
-| `rand` / `getrandom`           | core           | CSPRNG for salt + nonce prefix          |
-| `zeroize`                      | core           | Wipe key material from memory           |
-| `base64`                       | core           | ASCII armor                             |
-| `thiserror`                    | core, common   | Typed errors (`SymError`)                |
-| `clap` (derive)                | cli, tui¹      | Argument parsing                        |
-| `rpassword`                    | cli            | No-echo password prompt                 |
-| `indicatif`                    | cli            | Progress bar                            |
-| `ratatui`                      | tui            | Terminal UI widgets/layout              |
-| `crossterm`                    | tui            | Terminal backend, raw mode, key events  |
-| `relm4` + `relm4-components`   | gtk            | GUI framework over gtk4-rs (Elm arch.)²  |
-| `anyhow`                       | cli, tui, gtk  | Error reporting / context               |
+| Crate                          | Used in            | Purpose                                  |
+|--------------------------------|--------------------|------------------------------------------|
+| `aes-gcm`                      | core               | AES-256-GCM AEAD                         |
+| `chacha20poly1305`             | core               | ChaCha20-Poly1305 AEAD                   |
+| `argon2`                       | core               | Argon2id KDF                             |
+| `scrypt`                       | core               | scrypt KDF                               |
+| `pbkdf2` + `sha2`              | core               | PBKDF2-HMAC-SHA256 KDF                   |
+| `rand` / `getrandom`           | core               | CSPRNG for salt + nonce prefix           |
+| `zeroize`                      | core               | Wipe key material from memory            |
+| `base64`                       | core               | ASCII armor                              |
+| `thiserror`                    | core, common       | Typed errors (`SymError`)                |
+| `tempfile`                     | common, gtk, tests | Sibling temp files and test directories  |
+| `clap` (derive)                | cli, tui¹          | Argument parsing                         |
+| `rpassword`                    | cli                | No-echo password prompt                  |
+| `indicatif`                    | cli                | Progress bar                             |
+| `ratatui`                      | tui                | Terminal UI widgets/layout               |
+| `crossterm`                    | tui                | Terminal backend, raw mode, key events   |
+| `relm4` + `relm4-components`   | gtk                | GUI framework over gtk4-rs (Elm arch.)²  |
+| `anyhow`                       | cli, tui, gtk      | Error reporting / context                |
 
 ¹ The TUI uses `clap` only for an optional launch path; all interaction happens
 in the UI, and password input is captured in its own masked field (not
@@ -602,7 +675,8 @@ in the UI, and password input is captured in its own masked field (not
 
 ² relm4 builds on gtk4-rs and pairs with libadwaita for styling;
 `relm4-components` supplies file-dialog and worker helpers. `symcrypt-common`
-depends only on `symcrypt-core` and the standard library (plus `thiserror`).
+depends only on `symcrypt-core`, the standard library, `thiserror`, and
+`tempfile`.
 
 Exact versions are pinned at scaffolding time via `cargo add` (latest
 compatible). RustCrypto crates are chosen for being pure-Rust and widely
@@ -616,7 +690,11 @@ reviewed.
 
 - KDF determinism: same `(secret, salt, params)` → identical key; different
   params → different key.
+- Secret assembly: domain separation and length prefixes avoid password/keyfile
+  ambiguity; empty password + empty keyfile is rejected.
 - Header serialize → parse round-trip for every cipher/KDF/flag combination.
+- Header validation rejects out-of-range lengths, chunk sizes, reserved fields,
+  and excessive KDF costs before allocation or key derivation.
 - STREAM nonce derivation: counter increments, final flag placement.
 - Pure helpers: `default_encrypt_output` / `default_decrypt_output` and
   cipher/KDF `FromStr`/`Display` round-trips.
@@ -628,7 +706,9 @@ for each cipher and KDF.
 **Negative / tamper**
 
 - Flip a byte in the body → auth failure.
-- Flip a byte in the header (e.g. cipher_id) → auth failure (AAD).
+- Change a header byte to another valid value (e.g. `cipher_id` `0x01` →
+  `0x02`) → auth failure (AAD); change it to an unknown ID → unsupported
+  format.
 - Wrong password / wrong-or-missing keyfile → auth failure.
 - Truncate the last chunk → failure (final flag).
 - Append a chunk → failure.
@@ -639,12 +719,16 @@ format changes across versions.
 
 **Front-end tests.** Because the front-ends are thin, most coverage lives in
 core. `symcrypt` gets CLI integration tests (`assert_cmd` + `tempfile`):
-default-extension behavior, `-o -` / stdin, armor round-trip, `--info` output,
-clobber refusal vs `-f`, exit codes, password via file/env. The `symcrypt-common`
-glue (path-or-stdin opening, clobber check, secure remove, password-source
-precedence, exit-code mapping) is unit-tested directly. `symcrypt-tui` gets light
-tests of its non-UI glue; headless GTK testing is limited, so `symcrypt-gtk`
-relies on manual verification plus the shared core/helper tests.
+default-extension behavior, required `-o` for stdin encrypt/decrypt,
+`--remove` rejection with stdin, `-o -` / stdout, armor round-trip, `--info`
+output, `--verify` success/failure, clobber refusal vs `-f`, temp-file cleanup
+on failure/cancel, exit codes including 130 for cancellation, and password bytes
+via file/env/`--no-password`. The `symcrypt-common`
+glue (path-or-stdin opening, clobber check, best-effort remove, password-source
+precedence, exit-code mapping, and temp-file finalization) is unit-tested
+directly. `symcrypt-tui` gets light tests of its non-UI glue; headless GTK
+testing is limited, so `symcrypt-gtk` relies on manual verification plus the
+shared core/helper tests.
 
 Per repo convention, tests accompany every code change.
 
@@ -659,16 +743,26 @@ Per repo convention, tests accompany every code change.
   filesystems, overwriting does not guarantee erasure. `--remove` does a plain
   delete and the help says so plainly — we will not pretend to "shred."
 - **Filenames/sizes can be sensitive.** Storing the original filename is opt-in
-  (`--name`). Approximate plaintext size always leaks from ciphertext length;
-  symcrypt does not pad. (Padding is a possible future option.)
+  (`--name`) and stores only a sanitized basename. Approximate plaintext size
+  always leaks from ciphertext length; symcrypt does not pad. (Padding is a
+  possible future option.)
 - **Wrong password vs. corruption** are indistinguishable by design and reported
   as one condition.
+- **Unauthenticated header data is bounded.** Header lengths and KDF parameters
+  are capped before allocation or key derivation so malformed files cannot demand
+  unbounded memory or CPU.
+- **Stdout output cannot be rolled back.** File outputs use temporary files and
+  are finalized only after success, but stdout may already contain partial output
+  if an operation fails late.
 - **Nonce reuse is structurally avoided:** a random per-file key (random salt) +
   per-chunk counter/final-flag nonce means no `(key, nonce)` pair repeats.
-- **Header downgrade/tamper** is prevented by authenticating the full header as
-  AAD.
-- **Keyfiles** add a second factor but are read into process memory; they are
-  zeroized after key derivation, and their loss is unrecoverable.
+- **Header downgrade/tamper** is prevented during decrypt/verify by
+  authenticating the full header as AAD. Header metadata shown by `--info` is
+  unauthenticated until decrypt or verify succeeds.
+- **Keyfiles** can add a second factor but are read into process memory; they
+  are zeroized after key derivation, and their loss is unrecoverable.
+  Keyfile-only operation requires an explicit `--no-password` / keyfile-only
+  choice and relies on possession of that file as the only secret.
 - **Memory hygiene:** keys and derived buffers are wrapped in `zeroize` types and
   wiped on drop. We cannot prevent the OS from paging secrets to swap.
 - **KDF defaults** target meaningful offline-guessing cost on commodity hardware
@@ -724,6 +818,20 @@ All open questions are now settled:
       the CLI+TUI glue (§2) so nothing is reimplemented.
 - [x] **TUI file selection.** Plain **path entry** for v1; a built-in
       file-browser popup is a post-v1 enhancement (§7.1).
+- [x] **Secret input encoding.** Use domain-separated, length-prefixed password
+      + keyfile bytes, and reject empty password + empty keyfile (§4.2).
+- [x] **Header/KDF validation caps.** Bound all unauthenticated lengths,
+      `chunk_size`, and KDF costs before allocation or derivation (§5.4).
+- [x] **KDF-specific CLI knobs.** Expose Argon2id, scrypt, and PBKDF2 parameters
+      with explicit KDF-specific flags rather than overloaded generic flags
+      (§6.3).
+- [x] **Stdin and output finalization.** Require `-o` for stdin encrypt/decrypt,
+      reject `--remove` with stdin, and finalize file outputs via temp-file
+      rename only after success (§6.5).
+- [x] **Keyfile-only and cancellation semantics.** Keyfile-only mode requires
+      `--no-password`; cancellation returns `SymError::Canceled`, maps to CLI
+      exit 130, and is shown as non-error cancellation in UIs (§6.4, §6.6, §7,
+      §8).
 
 ---
 
@@ -740,4 +848,3 @@ and will be expanded once this design stabilizes.
 | `IMPLEMENTATION_PLAN_02_CLI.md`    | `symcrypt` command-line front-end.                           |
 | `IMPLEMENTATION_PLAN_03_TUI.md`    | `symcrypt-tui` terminal front-end.                           |
 | `IMPLEMENTATION_PLAN_04_GTK.md`    | `symcrypt-gtk` relm4/libadwaita desktop front-end.           |
-
