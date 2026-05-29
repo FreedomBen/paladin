@@ -149,7 +149,8 @@ or ciphertext before an error is detected.
 ```rust
 // ---- Inputs the front-ends assemble and hand to the core ----
 
-/// Password and/or keyfile material; zeroized on drop.
+/// Password and/or keyfile material; zeroized on drop. If `keyfile` is Some,
+/// it must be 1 byte..=1 MiB. Empty password + no keyfile is rejected.
 pub struct Secret { /* … */ }
 impl Secret {
     pub fn new(password: &[u8], keyfile: Option<&[u8]>) -> Result<Self>;
@@ -157,11 +158,16 @@ impl Secret {
 
 pub enum CipherId { Aes256Gcm, ChaCha20Poly1305 }   // FromStr / Display
 pub enum KdfId    { Argon2id, Scrypt, Pbkdf2 }       // FromStr / Display
+pub enum KdfParams {
+    Argon2id { memory_kib: u32, time_cost: u32, parallelism: u32 },
+    Scrypt { log_n: u32, r: u32, p: u32 },
+    Pbkdf2 { iterations: u32 },
+}
 
 pub struct EncryptOptions {
     pub cipher: CipherId,
     pub kdf: KdfId,
-    pub kdf_params: KdfParams,
+    pub kdf_params: KdfParams,     // variant must match `kdf`
     pub chunk_size: u32,           // default-only in v1 (§5.4)
     pub filename: Option<String>,  // Some(name) ⇒ store in header (--name)
     pub armor: bool,
@@ -171,6 +177,8 @@ impl Default for EncryptOptions { /* secure defaults from §12 */ }
 /// Progress callback payload. `done` is the running count of input bytes
 /// consumed so far; `total` echoes the caller's `input_len` — the input length
 /// when known (e.g. a regular file), or None when unknown (e.g. stdin).
+/// For armored decrypt/verify input, both `done` and `total` count the
+/// caller-provided armored bytes, before base64 decoding.
 /// `input_len` is advisory for progress only; the §4.3 size cap is enforced
 /// from the bytes actually streamed (input plaintext on encrypt, authenticated
 /// plaintext on decrypt/verify), so a wrong hint never affects safety.
@@ -426,8 +434,10 @@ encryption (§6.3). `chunk_size` is not user-settable in v1 — every new file i
 written with the 64 KiB default — but it is still range-checked on read so older
 or hand-crafted files are validated, and the `EncryptOptions.chunk_size` field is
 retained for forward compatibility and for tests that exercise multi-chunk
-streams on small inputs. `core::encrypt` range-checks `chunk_size` against the
-bounds above and rejects an out-of-range value before writing any output, so a
+streams on small inputs. `core::encrypt` validates `EncryptOptions` before
+writing any output: `kdf_params` must match `kdf`, `chunk_size` must be in
+range, and any `filename` must satisfy the basename rules from §5.2. Invalid
+programmatic options return `SymError::InvalidOptions` (exit 2), so a
 programmatically constructed `EncryptOptions` (for example in tests) cannot
 produce a file that fails its own read validation.
 
@@ -483,8 +493,9 @@ With `--armor`, the binary container is base64-encoded and wrapped:
 ```
 
 Encryption uses standard base64 (RFC 4648 `+`/`/` alphabet, with `=` padding),
-writes LF line endings, wraps the base64 at exactly 64 columns, and emits no
-extra text before the begin marker or after the end marker. Decrypt,
+writes LF line endings, wraps complete base64 lines at exactly 64 columns (with
+the final line shorter when needed), and emits no extra text before the begin
+marker or after the end marker. Decrypt,
 verify, and info auto-detect armor by the `-----BEGIN SYMCRYPT MESSAGE-----`
 line and strip it before parsing the binary header. They accept LF or CRLF line
 endings and surrounding whitespace, but require the exact begin/end marker
@@ -608,8 +619,9 @@ set but empty, or an empty interactive entry is a usage error (the encrypt
 prompt re-asks rather than accepting an empty passphrase). This keeps a
 misconfigured password source from silently downgrading a password-plus-keyfile
 setup to keyfile-only.
-`-k/--keyfile` requires a real file path; `-` is rejected so stdin remains
-reserved for the main input stream.
+`-k/--keyfile` requires an existing regular file path; `-` is rejected so stdin
+remains reserved for the main input stream. Directories, special files, and
+symlinks that resolve to non-regular files are usage errors.
 
 Password bytes are used exactly as provided; symcrypt does no Unicode
 normalization. Password text obtained from CLI argv, environment-variable
@@ -618,10 +630,11 @@ password argv or environment values are usage errors. Path arguments are
 OS-native paths and may be non-UTF-8; only a basename stored with `--name` must
 be valid UTF-8 (§5.2). If `--password-env <VAR>` names an unset variable, that
 is a usage error.
-`--password-file` requires a real file path; `-` is rejected so stdin remains
-reserved for the main input stream. It reads at most 1 MiB of raw bytes; a larger
-file is a usage error. It removes exactly one trailing LF or CRLF if present; no
-other whitespace is trimmed.
+`--password-file` requires an existing regular file path; `-` is rejected so
+stdin remains reserved for the main input stream. Directories, special files,
+and symlinks that resolve to non-regular files are usage errors. It reads at
+most 1 MiB of raw bytes; a larger file is a usage error. It removes exactly one
+trailing LF or CRLF if present; no other whitespace is trimmed.
 
 ### 6.5 Output defaults
 
@@ -635,10 +648,18 @@ other whitespace is trimmed.
   (e.g. `.symcrypt` → `.symcrypt.dec`).
   Stored names are written beside the input file. Refuse to overwrite unless
   `-f`.
+- **Filesystem path inputs/outputs:** when `<FILE>` is not `-`, it must be an
+  existing regular file. Directories, special files, and symlinks that resolve
+  to non-regular files are usage errors. Output paths may name a new file or an
+  existing regular file; existing directories or special files are usage errors
+  even with `-f`.
 - **Output must differ from input:** if the resolved output path refers to the
   same file as the input, the operation is a usage error (exit 2), refused
   before any work begins — preventing the temp-file rename from clobbering the
   source and, with `--remove`, preventing deletion of the freshly written output.
+  Resolve symlinks and compare filesystem identity (including hardlinks) using
+  platform metadata where available; where identity metadata is unavailable,
+  compare canonical absolute paths and still reject obvious self-overwrites.
 - **Stdin input (`<FILE>` is `-`):** encrypt/decrypt require `-o`; `--remove` is
   rejected. `--info` and `--verify` accept stdin and write no output file, so they
   need no `-o`.
@@ -670,9 +691,12 @@ other whitespace is trimmed.
 Errors returned by `symcrypt-core` map directly from its `SymError` variants —
 the front-end does not reclassify them: `Auth` → 3; `BadMagic` /
 `UnsupportedVersion` / `UnknownCipher` / `UnknownKdf` / `ReservedFlags` /
-`MalformedHeader` → 4; `Canceled` → 130; `Io`, `InputTooLarge`, and the like
-→ 1; argument/usage problems caught before the core is called → 2. The mapping
-lives in `symcrypt-common` and is shared by the CLI and TUI.
+`MalformedHeader` → 4; `InvalidOptions` (including an empty `Secret`, an empty
+or over-large keyfile buffer, mismatched KDF params, an unsafe stored filename,
+or an out-of-range programmatic `chunk_size`) → 2; `Canceled` → 130; `Io`,
+`InputTooLarge`, and the like → 1; argument/usage problems caught before the
+core is called → 2. The mapping lives in `symcrypt-common` and is shared by the
+CLI and TUI.
 
 `MalformedHeader` covers a header that is structurally invalid rather than merely
 unrecognized: an out-of-range `salt_len`, `nonce_prefix_len`, `chunk_size`,
@@ -718,9 +742,11 @@ calls the same four core functions.
 A single full-screen form, navigable entirely by keyboard:
 
 All TUI path fields accept filesystem paths only; a literal `-` is rejected
-because the terminal UI owns stdin/stdout. Input and keyfile paths must exist;
-output paths may name a new file. CLI remains the only v1 front-end with
-stdin/stdout streaming.
+because the terminal UI owns stdin/stdout. Input and keyfile paths must be
+existing regular files; directories, special files, and symlinks that resolve to
+non-regular files are rejected. Output paths may name a new file or an existing
+regular file, with the same overwrite and same-file checks as the CLI (§6.5).
+CLI remains the only v1 front-end with stdin/stdout streaming.
 
 - **Mode tabs:** Encrypt / Decrypt / Info / Verify.
 - **Input path** field (plain text entry for v1; a built-in file-browser popup
@@ -791,6 +817,8 @@ and invokes the core.
   overwrite confirmation is the GTK equivalent of the CLI's `-f`; if a path is
   typed or prefilled and already exists, Run shows the same confirmation before
   finalization. Without overwrite approval, the GTK app refuses to overwrite.
+  Input and keyfile selections must be existing regular files, and output paths
+  use the same regular-file, overwrite, and same-file checks as the CLI (§6.5).
 - `adw::PasswordEntryRow` for the password in Encrypt / Decrypt / Verify modes
   (+ a confirm row in Encrypt mode), a keyfile-only toggle equivalent to
   `--no-password`, and a keyfile chooser row (`-k`). Password-file and
@@ -861,15 +889,17 @@ chosen for being pure-Rust and widely reviewed.
 - KDF determinism: same `(secret, salt, params)` → identical key; different
   params → different key.
 - Secret assembly: domain separation and length prefixes avoid password/keyfile
-  ambiguity; empty password + empty keyfile is rejected.
+  ambiguity; empty password + empty keyfile is rejected, and a present keyfile
+  buffer must be 1 byte..=1 MiB.
 - Header serialize → parse round-trip for every cipher/KDF/flag combination.
 - Header validation rejects out-of-range lengths, chunk sizes, reserved fields,
   and excessive KDF costs before allocation or key derivation, reporting them as
   `MalformedHeader` (exit 4); a non-UTF-8 stored name is likewise rejected, while
   a valid-UTF-8 but unsafe name is ignored in favor of input-path derivation.
-- Encrypt-option validation rejects an unsafe or over-long `--name`, mismatched
-  KDF knobs, an out-of-range `chunk_size`, and plaintext larger than the v1 size
-  cap with `InputTooLarge` before any output is finalized.
+- Encrypt-option validation rejects an unsafe or over-long stored filename,
+  mismatched KDF params, and an out-of-range `chunk_size` with
+  `InvalidOptions`; it rejects plaintext larger than the v1 size cap with
+  `InputTooLarge` before any output is finalized.
 - Decrypt/verify size-cap enforcement rejects authenticated plaintext larger
   than the v1 size cap with `InputTooLarge`.
 - ASCII armor parser accepts LF/CRLF and surrounding whitespace, and rejects
@@ -914,7 +944,10 @@ clobber refusal vs `-f`, KDF-knob mismatch usage errors, `-q`/`-v` and
 `-k/--keyfile`, password-file and keyfile size caps, zero-byte keyfile
 rejection, rejection of empty-password sources (`-p ''`, empty `--password-file`,
 set-but-empty `--password-env`) except `--no-password`, temp-file cleanup and
-Unix `0600` output mode, exit codes including
+Unix `0600` output mode, rejection of directories and special files for input,
+password-file, keyfile, and existing output paths, symlink-resolved same-file
+refusal, hardlink same-file refusal where platform metadata supports it, exit
+codes including
 130 for cancellation, exact lowercase cipher/KDF parsing, non-UTF-8
 OS-native path handling where the platform supports it, and password bytes via
 file/env/`--no-password`. The
@@ -1042,10 +1075,13 @@ All open questions are now settled:
       are defined; and `--remove` warns but still exits 0 if deletion fails
       after a successful operation (§6).
 - [x] **Post-review contract details.** The 64 GiB plaintext cap applies to
-      encrypt, decrypt, and verify; TUI path fields reject `-`; cipher/KDF names
-      are exact lowercase strings with no aliases; non-UTF-8 OS-native paths are
-      allowed except where text is stored in the header; and password-file/env
-      sources are CLI-only (§4, §6, §7, §8).
+      encrypt, decrypt, and verify; front-end path fields reject `-` where
+      stdin/stdout are not supported; filesystem inputs/keyfiles/password files
+      must be regular files; output same-file checks resolve symlinks and use
+      hardlink identity where available; cipher/KDF names are exact lowercase
+      strings with no aliases; non-UTF-8 OS-native paths are allowed except
+      where text is stored in the header; and password-file/env sources are
+      CLI-only (§4, §6, §7, §8).
 
 ---
 
