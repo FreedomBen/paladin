@@ -24,7 +24,7 @@ depend on the crates planned here.
 - [x] `core`: error types (`SymError`, `Result`).
 - [x] `core`: `Secret` (password + keyfile) with zeroization.
 - [x] `core`: cipher dispatch (AES-256-GCM, ChaCha20-Poly1305).
-- [ ] `core`: KDF dispatch (Argon2id, scrypt, PBKDF2) + param encoding + defaults.
+- [x] `core`: KDF dispatch (Argon2id, scrypt, PBKDF2) + param encoding + defaults.
 - [ ] `core`: header serialize / parse (+ optional filename, flags, versioning).
 - [ ] `core`: STREAM chunked encrypt/decrypt with progress + cancellation.
 - [ ] `core`: ASCII armor wrap/unwrap + auto-detect.
