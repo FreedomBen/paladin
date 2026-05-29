@@ -27,7 +27,8 @@ const FLAGS_ALLOWED: u8 = FLAG_FILENAME | FLAG_KEYFILE;
 // §5.4 ranges owned by the header (KDF cost ranges live in kdf.rs).
 const SALT_LEN: std::ops::RangeInclusive<usize> = 16..=64;
 const NONCE_PREFIX_LEN: usize = 7;
-const CHUNK_SIZE: std::ops::RangeInclusive<u32> = 4096..=16_777_216;
+/// Valid `chunk_size` range (DESIGN §5.4); shared with encrypt-option validation.
+pub(crate) const CHUNK_SIZE: std::ops::RangeInclusive<u32> = 4096..=16_777_216;
 const NAME_LEN: std::ops::RangeInclusive<usize> = 1..=255;
 
 /// Whether and how a stored original filename can be used (DESIGN §5.2, §6.2).

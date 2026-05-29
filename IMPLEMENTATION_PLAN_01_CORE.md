@@ -26,7 +26,7 @@ depend on the crates planned here.
 - [x] `core`: cipher dispatch (AES-256-GCM, ChaCha20-Poly1305).
 - [x] `core`: KDF dispatch (Argon2id, scrypt, PBKDF2) + param encoding + defaults.
 - [x] `core`: header serialize / parse (+ optional filename, flags, versioning).
-- [ ] `core`: STREAM chunked encrypt/decrypt with progress + cancellation.
+- [x] `core`: STREAM chunked encrypt/decrypt with progress + cancellation.
 - [ ] `core`: ASCII armor wrap/unwrap + auto-detect.
 - [ ] `core`: pure helpers — default output paths, cipher/KDF name parsing.
 - [ ] `core`: unit, round-trip, tamper, and KAT tests.
