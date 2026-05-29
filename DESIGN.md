@@ -172,7 +172,8 @@ impl Default for EncryptOptions { /* secure defaults from §12 */ }
 /// consumed so far; `total` echoes the caller's `input_len` — the input length
 /// when known (e.g. a regular file), or None when unknown (e.g. stdin).
 /// `input_len` is advisory for progress only; the §4.3 size cap is enforced
-/// from the bytes actually streamed, so a wrong hint never affects safety.
+/// from the bytes actually streamed (input plaintext on encrypt, authenticated
+/// plaintext on decrypt/verify), so a wrong hint never affects safety.
 /// Returning Break aborts with SymError::Canceled.
 pub struct Progress { pub done: u64, pub total: Option<u64> }
 type OnProgress = dyn FnMut(Progress) -> std::ops::ControlFlow<()>;
@@ -312,13 +313,17 @@ nonce[11]     = final_flag     # 0x00 for normal chunks, 0x01 for the last chunk
   counter is advanced with checked arithmetic; a stream that would exceed 2³²
   chunks is rejected as an authentication failure (`SymError::Auth`, exit 3)
   rather than wrapping the counter.
-- **v1 file-size cap:** refuse to encrypt plaintext larger than 64 GiB. This is
-  comfortably below the nonce counter limit and keeps AES-GCM usage within a
-  conservative per-key data bound. Exceeding either the chunk-count or the
-  file-size limit while encrypting is reported as `SymError::InputTooLarge`
-  (exit 1), detected during streaming and before any output is finalized.
-  Larger-file support can later use explicit segment keys or another reviewed
-  construction.
+- **v1 file-size cap:** refuse to encrypt, decrypt, or verify plaintext larger
+  than 64 GiB. This is comfortably below the nonce counter limit and keeps
+  AES-GCM usage within a conservative per-key data bound. The cap is enforced
+  from streamed plaintext bytes, not from the caller's advisory `input_len`.
+  Exceeding either the chunk-count or file-size limit while encrypting is
+  reported as `SymError::InputTooLarge` (exit 1), detected during streaming and
+  before any file output is finalized. During decrypt/verify, an authenticated
+  plaintext stream that would exceed 64 GiB is also rejected as
+  `SymError::InputTooLarge`; file outputs are removed, while stdout may already
+  contain plaintext written before the cap was reached. Larger-file support can
+  later use explicit segment keys or another reviewed construction.
 
 ### 4.4 Verification semantics
 
@@ -406,6 +411,9 @@ The three `kdf_p*` u32 fields are interpreted per `kdf_id`:
 | scrypt   | log₂(N)          | r                  | p                                       |
 | PBKDF2   | iterations       | 0 (reserved)       | 0 (reserved) — PRF fixed at HMAC-SHA256 |
 
+All KDFs produce the 32-byte AEAD key from §4.1. Argon2id uses Argon2
+version `0x13` (v1.3).
+
 Header values are unauthenticated until decrypt/verify succeeds, so parsers
 validate sizes and KDF costs before allocation or key derivation. Values outside
 these ranges are malformed-header errors (exit 4) when read from a file, and
@@ -491,9 +499,11 @@ the *defaults* for new files evolve over time.
 `symcrypt` is the command-line front-end: a thin wrapper that parses arguments,
 resolves the password, opens streams, calls `symcrypt-core`, and maps results to
 exit codes. It contains no crypto or format logic. The flags below are also the
-shared vocabulary the TUI and GTK app expose through their own controls — cipher
-and KDF names, defaults, and output-path rules all come from core helpers, so
-all three front-ends stay identical.
+shared vocabulary the TUI and GTK app expose through their own controls where
+applicable — cipher and KDF names, defaults, and output-path rules all come from
+core helpers, so shared behavior stays identical across front-ends. CLI-only
+behavior includes stdin/stdout streaming (`-`), password files, and password
+environment variables.
 
 ### 6.1 Synopsis
 
@@ -554,6 +564,9 @@ malformed header and does not produce normal `--info` output.
 | `-V, --version`            | —              | Print version.                                                        |
 | `-h, --help`               | —              | Print help.                                                           |
 
+Cipher and KDF names are parsed as exact, lowercase strings shown in the table;
+there are no aliases and no case folding in v1.
+
 Flags supplied for a mode they do not apply to (per the **Applies to** column)
 are usage errors (exit 2), not silently ignored — e.g. `-c/--cipher` or any KDF
 cost knob with `--decrypt`/`--info`/`--verify`, `-o/--output` with
@@ -562,6 +575,7 @@ KDF-specific cost knobs are also usage errors unless their matching `--kdf` is
 selected: Argon2id knobs require `--kdf argon2id` or the default KDF, scrypt
 knobs require `--kdf scrypt`, and PBKDF2 knobs require `--kdf pbkdf2`. Supplying
 `--scrypt-*` or `--pbkdf2-iterations` never implicitly changes the KDF.
+Unspecified cost knobs use the selected KDF's defaults from §12.
 `-q/--quiet` and `-v/--verbose` are mutually exclusive. `--progress` with
 `--quiet` is a usage error; `--no-progress` with `--quiet` is allowed but
 redundant. Quiet mode does not suppress primary stdout output such as `--info`,
@@ -590,8 +604,10 @@ reserved for the main input stream.
 Password bytes are used exactly as provided; symcrypt does no Unicode
 normalization. Password text obtained from CLI argv, environment-variable
 values, TUI fields, and GTK entries is encoded as UTF-8 bytes; non-UTF-8
-password argv or environment values are usage errors. If `--password-env <VAR>`
-names an unset variable, that is a usage error.
+password argv or environment values are usage errors. Path arguments are
+OS-native paths and may be non-UTF-8; only a basename stored with `--name` must
+be valid UTF-8 (§5.2). If `--password-env <VAR>` names an unset variable, that
+is a usage error.
 `--password-file` requires a real file path; `-` is rejected so stdin remains
 reserved for the main input stream. It reads at most 1 MiB of raw bytes; a larger
 file is a usage error. It removes exactly one trailing LF or CRLF if present; no
@@ -619,7 +635,9 @@ other whitespace is trimmed.
 - **File outputs:** write to a sibling temporary file, then rename it into place
   only after success. On Unix, create the temporary output with mode `0600`
   (`rw-------`) and do not preserve source-file permissions in v1. Remove the
-  temporary file on error, authentication failure, or cancellation.
+  temporary file on error, authentication failure, cancellation, or output
+  finalization failure. A failed rename/finalization is a general I/O error
+  (exit 1), and `--remove` is not attempted.
 - **`--remove`:** after a successful encrypt/decrypt and successful output
   finalization, attempt to delete the input path. If deletion fails, keep the
   successful output, print a warning on stderr, and still exit 0.
@@ -639,12 +657,12 @@ other whitespace is trimmed.
 | 4    | Unsupported, unknown, or malformed format/header |
 | 130  | Canceled by the user                             |
 
-These codes map directly from `symcrypt-core`'s `SymError` variants — the
-front-end classifies nothing itself: `Auth` → 3; `BadMagic` /
+Errors returned by `symcrypt-core` map directly from its `SymError` variants —
+the front-end does not reclassify them: `Auth` → 3; `BadMagic` /
 `UnsupportedVersion` / `UnknownCipher` / `UnknownKdf` / `ReservedFlags` /
-`MalformedHeader` → 4; `Canceled` → 130; `Io`, `InputTooLarge`, and the like → 1; argument/usage
-problems caught before the core is called → 2. The mapping lives in
-`symcrypt-common` and is shared by the CLI and TUI.
+`MalformedHeader` → 4; `Canceled` → 130; `Io`, `InputTooLarge`, and the like
+→ 1; argument/usage problems caught before the core is called → 2. The mapping
+lives in `symcrypt-common` and is shared by the CLI and TUI.
 
 `MalformedHeader` covers a header that is structurally invalid rather than merely
 unrecognized: an out-of-range `salt_len`, `nonce_prefix_len`, `chunk_size`,
@@ -688,6 +706,10 @@ calls the same four core functions.
 
 A single full-screen form, navigable entirely by keyboard:
 
+All TUI path fields accept real filesystem paths only; a literal `-` is rejected
+because the terminal UI owns stdin/stdout. CLI remains the only v1 front-end with
+stdin/stdout streaming.
+
 - **Mode tabs:** Encrypt / Decrypt / Info / Verify.
 - **Input path** field (plain text entry for v1; a built-in file-browser popup
   is a post-v1 enhancement).
@@ -696,6 +718,7 @@ A single full-screen form, navigable entirely by keyboard:
 - **Password** field, shown for Encrypt / Decrypt / Verify (masked, captured
   inside the event loop), plus a **confirm** field shown only in Encrypt mode,
   a show/hide toggle, and a keyfile-only toggle equivalent to `--no-password`.
+  Password-file and password-env sources are CLI-only.
 - **Advanced** (collapsible): Encrypt-only cipher and KDF selectors, `--name`
   and armor toggles, KDF-specific cost knobs, and (Encrypt / Decrypt)
   remove-input-after-success and overwrite-existing toggles mirroring the CLI's
@@ -739,7 +762,8 @@ relm4 structures the app as the Elm triad: a `Model` (UI state), `Input`
 messages (user/UI events), and a declarative `view!`. `AppModel` holds the
 selected mode, input/output paths, password + confirm, keyfile-only choice,
 advanced options (cipher, KDF, KDF-specific cost knobs, keyfile, `--name`,
-armor, and a remove-input-after-success toggle), and run status/progress. UI events become `Input` messages —
+armor, remove-input-after-success, and overwrite approval for the selected
+output path), and run status/progress. UI events become `Input` messages —
 `SetInputFile`, `PickOutput`, `SetPassword`, `SetKeyfile`, `ToggleAdvanced`,
 `Run`, `Cancel` — handled in `update`, which mutates the model and re-renders.
 The model never calls crypto directly; it builds a `Secret` + `EncryptOptions`
@@ -752,10 +776,13 @@ and invokes the core.
 - `adw::EntryRow` for paths, each with a "browse" button opening
   `gtk::FileDialog`; the output row is shown only for Encrypt / Decrypt and is
   prefilled from `core::default_*_output` (§6.5). The save dialog's native
-  overwrite confirmation is the GTK equivalent of the CLI's `-f`.
+  overwrite confirmation is the GTK equivalent of the CLI's `-f`; if a path is
+  typed or prefilled and already exists, Run shows the same confirmation before
+  finalization. Without overwrite approval, the GTK app refuses to overwrite.
 - `adw::PasswordEntryRow` for the password in Encrypt / Decrypt / Verify modes
   (+ a confirm row in Encrypt mode), a keyfile-only toggle equivalent to
-  `--no-password`, and a keyfile chooser row (`-k`).
+  `--no-password`, and a keyfile chooser row (`-k`). Password-file and
+  password-env sources are CLI-only.
 - `adw::PreferencesGroup` + `adw::ExpanderRow` for the collapsible Advanced
   section.
 - `gtk::ProgressBar` + `adw::ToastOverlay` for progress and status/errors.
@@ -828,16 +855,19 @@ chosen for being pure-Rust and widely reviewed.
   and excessive KDF costs before allocation or key derivation, reporting them as
   `MalformedHeader` (exit 4); a non-UTF-8 stored name is likewise rejected, while
   a valid-UTF-8 but unsafe name is ignored in favor of input-path derivation.
-- Encrypt-option validation rejects an unsafe `--name` and mismatched KDF
-  knobs; encrypting plaintext larger than the v1 size cap fails with
-  `InputTooLarge` before any output is finalized.
+- Encrypt-option validation rejects an unsafe `--name`, mismatched KDF knobs,
+  and plaintext larger than the v1 size cap with `InputTooLarge` before any
+  output is finalized.
+- Decrypt/verify size-cap enforcement rejects authenticated plaintext larger
+  than the v1 size cap with `InputTooLarge`.
 - ASCII armor parser accepts LF/CRLF and surrounding whitespace, and rejects
   extra non-whitespace outside the markers, invalid base64, and missing end
   markers.
 - STREAM nonce derivation: counter increments, final flag placement.
 - Pure helpers: `default_encrypt_output` / `default_decrypt_output` (including
   the empty-basename fallback, e.g. `.symcrypt` → `.symcrypt.dec`) and
-  cipher/KDF `FromStr`/`Display` round-trips.
+  exact lowercase cipher/KDF `FromStr`/`Display` round-trips with alias/case
+  rejection.
 
 **Round-trip** (parameterized over sizes: 0, 1, `chunk_size−1`, `chunk_size`,
 `chunk_size+1`, several MiB): encrypt then decrypt reproduces the input exactly,
@@ -873,11 +903,14 @@ clobber refusal vs `-f`, KDF-knob mismatch usage errors, `-q`/`-v` and
 rejection, rejection of empty-password sources (`-p ''`, empty `--password-file`,
 set-but-empty `--password-env`) except `--no-password`, temp-file cleanup and
 Unix `0600` output mode, exit codes including
-130 for cancellation, and password bytes via file/env/`--no-password`. The
+130 for cancellation, exact lowercase cipher/KDF parsing, non-UTF-8
+OS-native path handling where the platform supports it, and password bytes via
+file/env/`--no-password`. The
 `symcrypt-common`
 glue (path-or-stdin opening, clobber check, best-effort remove, password-source
 exclusivity/resolution, exit-code mapping, and temp-file finalization) is
-unit-tested directly. `symcrypt-tui` gets light tests of its non-UI glue;
+unit-tested directly. `symcrypt-tui` gets light tests of its non-UI glue,
+including rejection of `-` for path fields;
 headless GTK testing is limited, so `symcrypt-gtk` relies on manual verification
 plus the shared core/helper tests.
 
@@ -896,7 +929,8 @@ Per repo convention, tests accompany every code change.
 - **Filenames/sizes can be sensitive.** Storing the original filename is opt-in
   (`--name`) and stores only a well-formed basename. Approximate plaintext size
   always leaks from ciphertext length; symcrypt does not pad. v1 refuses to
-  encrypt plaintext larger than 64 GiB. (Padding is a possible future option.)
+  encrypt, decrypt, or verify plaintext larger than 64 GiB. (Padding is a
+  possible future option.)
 - **Wrong password vs. corruption** are indistinguishable by design and reported
   as one condition.
 - **Unauthenticated header data is bounded.** Header lengths and KDF parameters
@@ -995,6 +1029,11 @@ All open questions are now settled:
       size-capped; empty keyfiles are rejected; quiet/verbose/progress conflicts
       are defined; and `--remove` warns but still exits 0 if deletion fails
       after a successful operation (§6).
+- [x] **Post-review contract details.** The 64 GiB plaintext cap applies to
+      encrypt, decrypt, and verify; TUI path fields reject `-`; cipher/KDF names
+      are exact lowercase strings with no aliases; non-UTF-8 OS-native paths are
+      allowed except where text is stored in the header; and password-file/env
+      sources are CLI-only (§4, §6, §7, §8).
 
 ---
 
