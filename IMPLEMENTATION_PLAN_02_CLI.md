@@ -33,7 +33,8 @@ into these APIs. Verified against the current source.
 | `Secret::new(password, keyfile)`                  | Building the zeroized secret from resolved bytes.             |
 | `EncryptOptions` + `Default`                      | Encrypt knobs; secure defaults from [DESIGN §12](DESIGN.md#12-defaults-summary). |
 | `CipherId` (`FromStr`/`Display`)                  | Parsing `-c/--cipher`; display in `--info`.                   |
-| `KdfId`, `KdfParams` (`FromStr`/`Display`)        | Parsing `--kdf`; assembling per-KDF cost knobs.              |
+| `KdfId` (`FromStr`/`Display`)                     | Parsing `--kdf`; KDF name in `--info`.                       |
+| `KdfParams` + `KdfParams::default_for(KdfId)`     | Per-KDF cost-knob assembly: start from the KDF default, override supplied knobs. `KdfParams` has no `FromStr`/`Display`; `--info` formats it directly (§7). |
 | `Header`, `NameStatus`                            | `--info` field values and `name_status`.                     |
 | `Progress`, `OnProgress`                          | Progress-callback payload and signature.                     |
 | `default_encrypt_output` / `default_decrypt_output` | Default `-o` derivation (§6.5); decrypt needs a parsed `Header`. |
@@ -102,9 +103,8 @@ Per [DESIGN §9](DESIGN.md#9-dependencies). Versions resolved via `cargo add`
 | `clap` (features = `derive`)     | Argument parsing, `--help`, `--version`.                      |
 | `rpassword`                      | No-echo interactive password prompt.                         |
 | `indicatif`                      | Progress bar on stderr.                                       |
-| `anyhow`                         | Error context in `main`/`run` glue (not for typed mapping).   |
-| `zeroize`                        | Hold prompt-captured password bytes in a zeroizing buffer.    |
-| `ctrlc` **(new — confirm)**      | SIGINT handler to flip the cancel flag (§6.6). Not in the §9 table; see §11. |
+| `zeroize`                        | Hold prompt-captured password bytes in a zeroizing buffer. New CLI use — added to DESIGN §9 (was core-only); see §10–§11. |
+| `ctrlc`                          | SIGINT handler to flip the cancel flag (§6.6). New CLI dep — added to DESIGN §9; see §10–§11. |
 | `assert_cmd`, `predicates` *(dev)* | Integration tests.                                          |
 | `tempfile` *(dev)*               | Test fixtures / temp dirs.                                   |
 
@@ -148,6 +148,15 @@ clap expresses what it can (the required mode group, `-V`/`-h`). Cross-flag
 rules that clap can't cleanly state (mode→flag applicability, KDF-knob↔`--kdf`,
 `--name`+stdin, `--progress`+`--quiet`) live in `validate.rs` (§5, step 3) so the
 messages are precise and uniformly mapped to exit 2.
+
+**`-v/--verbose` output.** Verbose prints a defined, secret-free set of
+diagnostics to stderr: before streaming, the mode, the resolved input and output
+paths (`-` for stdin/stdout), and — on encrypt — the chosen cipher and KDF with
+their cost parameters plus whether a keyfile is in use; on success, a one-line
+summary naming the operation and the finalized output path. It never prints
+passwords, keyfile contents, or derived keys, and `-q/--quiet` suppresses it (the
+two are mutually exclusive). With neither flag, only the progress bar (§6.5) and
+errors are shown.
 
 ---
 
@@ -371,10 +380,18 @@ After code changes: `cargo fmt`, `cargo clippy --all-targets --all-features`
 
 ## 10. Open items / confirmations
 
-- **SIGINT crate.** §6.6 requires a handler but [DESIGN §9](DESIGN.md#9-dependencies)
-  lists no signal crate. Plan adds **`ctrlc`** (small, cross-platform). Confirm
-  the choice (alt: `signal-hook`), then add it to the §9 table so docs stay in
-  sync — this is a CLI dependency change, so update DESIGN §9 when adopted.
+- **SIGINT crate — resolved.** §6.6 requires a handler but [DESIGN §9](DESIGN.md#9-dependencies)
+  listed no signal crate. The CLI uses **`ctrlc`** (small, cross-platform; chosen
+  over `signal-hook`) and it has been added to the DESIGN §9 table.
+- **`zeroize` for the CLI — resolved.** The interactive prompt buffer is held in
+  `Zeroizing<Vec<u8>>`, so the CLI takes a direct `zeroize` dependency. DESIGN §9
+  listed `zeroize` as core-only; its row now also lists `cli`.
+- **`anyhow` dropped from the CLI — resolved.** The CLI's error currency is
+  `AppError`/`AppResult` (message + `exit_code()`), which `anyhow` does not
+  compose with, so the CLI takes no `anyhow` dependency; DESIGN §9's `anyhow` row
+  no longer lists `cli`.
+- **`-v/--verbose` — resolved.** Verbose prints a defined, secret-free set of
+  stderr diagnostics (§4); it is no longer left unspecified.
 - **TTY detection** uses std `IsTerminal` (Rust ≥ 1.70; workspace is 1.94) — no
   extra crate.
 - Everything else is fully determined by `symcrypt-core` + `symcrypt-common`,
@@ -395,4 +412,4 @@ After code changes: `cargo fmt`, `cargo clippy --all-targets --all-features`
 - [ ] **Step 9** — `info.rs` exact stable `--info` output.
 - [ ] **Step 10** — `assert_cmd` integration suite (§8); `fmt` + `clippy` clean.
 - [ ] **Step 11** — `--help` text, `symcrypt(1)` man page, `cargo install`, README CLI section.
-- [ ] DESIGN §9 updated if `ctrlc` (or alternative) is adopted.
+- [ ] DESIGN §9 updated: add `ctrlc` (cli); add `cli` to `zeroize`; drop `cli` from `anyhow`.

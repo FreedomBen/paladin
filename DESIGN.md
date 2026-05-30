@@ -869,18 +869,19 @@ the worker in a zeroizing buffer.
 | `scrypt`                       | core               | scrypt KDF                               |
 | `pbkdf2` + `sha2`              | core               | PBKDF2-HMAC-SHA256 KDF                   |
 | `rand` / `getrandom`           | core               | CSPRNG for salt + nonce prefix           |
-| `zeroize`                      | core               | Wipe key material from memory            |
+| `zeroize`                      | core, cli          | Wipe key material from memory            |
 | `base64`                       | core               | ASCII armor                              |
 | `thiserror`                    | core, common       | Typed errors (`SymError`)                |
 | `tempfile`                     | common, gtk, tests | Sibling temp files and test directories  |
 | `clap` (derive)                | cli, tui¹          | Argument parsing                         |
 | `rpassword`                    | cli                | No-echo password prompt                  |
 | `indicatif`                    | cli                | Progress bar                             |
+| `ctrlc`                        | cli                | SIGINT handler → cancel flag             |
 | `ratatui`                      | tui                | Terminal UI widgets/layout               |
 | `crossterm`                    | tui                | Terminal backend, raw mode, key events   |
 | `relm4` + `relm4-components`   | gtk                | GUI framework over gtk4-rs (Elm arch.)²  |
 | `libadwaita`                   | gtk                | GNOME widgets and styling                |
-| `anyhow`                       | cli, tui, gtk      | Error reporting / context                |
+| `anyhow`                       | tui, gtk           | Error reporting / context                |
 
 ¹ The TUI uses `clap` only for an optional launch path; all interaction happens
 in the UI, and password input is captured in its own masked field (not
