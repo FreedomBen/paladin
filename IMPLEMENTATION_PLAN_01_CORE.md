@@ -72,9 +72,9 @@ dependencies arrive in plans `02`–`04`. Do **not** add front-end deps
 
 **Tasks**
 
-- Root `Cargo.toml`: `[workspace]` with `resolver = "3"`, `members` listing all
+- Root `Cargo.toml`: `[workspace]` with `resolver = "2"`, `members` listing all
   five crates under `crates/`, and a shared `[workspace.package]` (edition
-  `2024`, rust-version `1.94`, license, repository) + `[workspace.dependencies]`
+  `2021`, rust-version `1.94`, license, repository) + `[workspace.dependencies]`
   table so versions are pinned once.
 - Create the directory tree from §2.1 (`crates/symcrypt-core/src/{lib,error,
   secret,header,kdf,cipher,stream,armor,paths}.rs` as empty modules wired into
@@ -461,13 +461,16 @@ missing end marker → `MalformedHeader`.
 - Acceptance: CRLF line endings and surrounding whitespace accepted.
 - Rejection (`MalformedHeader`): junk before BEGIN / after END, invalid base64,
   missing END marker.
-- **KAT:** a committed armored blob dearmors to a known binary container.
+- **KAT:** the committed armored-container fixture is verified with the stream
+  KAT (Phase 10) — it dearmors and decrypts to known plaintext; the armor module
+  itself is covered by the round-trip and shape tests above.
 
 **Checklist**
 
 - [x] `ArmorWriter` (64-col wrap, LF, markers, explicit `finish`).
 - [x] `dearmor_if_armored` with peek-based detection and binary pass-through.
-- [x] Round-trip, shape, accept (LF/CRLF/whitespace), reject, KAT tests green.
+- [x] Round-trip, shape, accept (LF/CRLF/whitespace), and reject tests green
+  (the committed armored KAT fixture lives with the stream KAT, Phase 10).
 
 ---
 
@@ -534,8 +537,12 @@ pub fn verify<R: Read>(input: R, secret: &Secret, input_len: Option<u64>,
     on_progress: &mut OnProgress) -> Result<()>;
 ```
 
-Constants: `PLAINTEXT_CAP: u64 = 64 * 1024 * 1024 * 1024`, `DEFAULT_CHUNK_SIZE:
-u32 = 65536`, `SALT_LEN: usize = 16`, `NONCE_PREFIX_LEN: usize = 7`.
+Constants: the 64 GiB plaintext cap is the module-private `MAX_PLAINTEXT` in
+`stream.rs`; `SALT_LEN` (16) and `NONCE_PREFIX_LEN` (7) are likewise private (in
+`stream.rs`, with the read-side `salt_len` range in `header.rs`); the 64 KiB
+default chunk size comes from `EncryptOptions::default()` rather than a named
+constant. The only public constant is `KEYFILE_MAX_BYTES` (1 MiB, from
+`secret.rs`, Phase 2); §2.3 does not require the rest to be public.
 
 **`encrypt` flow** (§2.4, §4.2, §4.3, §5.4):
 
@@ -566,11 +573,11 @@ body read, unauthenticated (powers `--info`, §6.2).
 raw-input-consumed via `CountingReader`. The size cap is always enforced from
 plaintext bytes, never from `input_len` (advisory only, §2.3, §4.3).
 
-**Deterministic seam for KAT:** add `pub(crate) fn encrypt_with_entropy(...)`
-taking explicit `salt: &[u8]` + `nonce_prefix: &[u8;7]`; public `encrypt` calls
-it with `OsRng` output. In-crate KAT unit tests call it with fixed entropy so
-re-encryption reproduces committed fixtures byte-for-byte (§10); production
-always uses `OsRng`.
+**Deterministic seam for KAT:** `stream.rs` defines `fn encrypt_deterministic(...)`
+taking an explicit `salt: &[u8; 16]`, `nonce_prefix: &[u8; 7]`, and plaintext
+cap; the normal `encrypt` path calls it with `OsRng` values and `MAX_PLAINTEXT`.
+In-crate KAT unit tests call it with fixed entropy so re-encryption reproduces
+committed fixtures byte-for-byte (§10); production always uses `OsRng`.
 
 **Tests first** (smoke-level here; exhaustive coverage is Phase 10)
 
@@ -584,48 +591,57 @@ always uses `OsRng`.
 
 **Checklist**
 
-- [x] `EncryptOptions` (+ `Default` = §12), `Progress`, `OnProgress`, constants.
+- [x] `EncryptOptions` (+ `Default` = §12), `Progress`, `OnProgress` (defined in `stream.rs`, re-exported by `lib.rs`); internal caps/lengths + public `KEYFILE_MAX_BYTES`.
 - [x] `encrypt` with option validation, OsRng entropy, armor wrap, AAD binding.
 - [x] `decrypt`/`verify` with `CountingReader`, dearmor, sink-for-verify.
 - [x] `inspect` returning unauthenticated `Header`.
-- [x] `encrypt_with_entropy` seam for deterministic KAT.
+- [x] `encrypt_deterministic` seam (in `stream.rs`) for deterministic KAT.
 - [x] Smoke round-trip / option-validation / cancel tests green.
 
 ---
 
-## Phase 10 — Core integration tests (`crates/symcrypt-core/tests/`)
+## Phase 10 — Core test suite (inline unit tests + `tests/integration.rs`)
 
-**Goal:** the exhaustive suite from §10. Use **minimal KDF cost params**
+**Goal:** the exhaustive coverage from §10. Use **minimal KDF cost params**
 (Argon2id `{8192,1,1}`, scrypt `{10,1,1}`, PBKDF2 `{10000}`) so the suite stays
-fast; cost-correctness is already covered in Phase 4.
+fast; cost-correctness is already covered in Phase 4. **As built, this coverage
+lives inline in the `src/*.rs` `#[cfg(test)]` modules** (each module tests its
+own format/stream/armor internals), with a single external
+`crates/symcrypt-core/tests/integration.rs` exercising the composed public API
+(`encrypt`/`decrypt`/`inspect`/`verify` + path helpers) the front-ends use.
 
-**`round_trip.rs`** — parameterized over sizes {0, 1, `chunk-1`, `chunk`,
-`chunk+1`, several MiB} × {both ciphers} × {all three KDFs} × {armored, binary}:
-`encrypt` then `decrypt` reproduces the input exactly.
+**Round-trip** (`stream.rs::round_trip_across_sizes_and_ciphers`) over sizes
+{0, 1, `chunk-1`, `chunk`, `chunk+1`, multi-chunk} × both ciphers; `integration.rs`
+adds {both ciphers} × {all three KDFs} × {armored, binary} on a multi-chunk
+payload: `encrypt` then `decrypt` reproduces the input exactly.
 
-**`tamper.rs`** (each → `Auth` unless noted):
+**Tamper** (in `stream.rs`, plus armored tamper in `integration.rs`; each →
+`Auth` unless noted):
 
 - Flip a byte in the body.
 - Change a header byte to another *valid* value (`cipher_id 0x01→0x02`) → `Auth`
   (AAD mismatch); change it to an *unknown* id → `UnknownCipher`/`UnknownKdf`
-  (exit 4).
-- Wrong password; wrong keyfile; missing keyfile.
+  (exit 4, in `integration.rs`).
+- Wrong password; wrong/missing keyfile.
 - Truncate the last chunk; append a chunk; swap two chunks.
 - Truncate body to a sub-tag fragment; drop the body entirely.
 
-**`kat.rs`** — committed fixtures under `tests/vectors/`:
+**KAT** (`stream.rs::known_answer_vectors_are_stable_and_decrypt` and
+`armored_known_answer_vector_is_stable_and_decrypts`) — committed **inline** hex
+vectors (no `tests/vectors/` directory):
 
-- Decrypt direction: each fixture (per cipher × KDF, fixed password/salt/
-  nonce-prefix/plaintext) decrypts to the expected plaintext via the public API.
-- (Re-encryption byte-equality lives in-crate using the `encrypt_with_entropy`
-  seam, per Phase 9.)
-- Include at least one armored fixture.
+- Re-encryption byte-equality via the `encrypt_deterministic` seam (Phase 9):
+  each vector (per cipher × KDF, fixed password/salt/nonce-prefix/plaintext)
+  re-encrypts to the committed hex constant, and each committed vector decrypts
+  back to the expected plaintext.
+- One armored fixture: the committed armored container decrypts via the public
+  auto-dearmor + stream path, locking the base64 framing.
 
 **Checklist**
 
-- [x] `round_trip.rs` across all size × cipher × KDF × armor combinations.
-- [x] `tamper.rs` covering every §10 negative case with correct error variant.
-- [x] `kat.rs` + committed `tests/vectors/` (binary + armored).
+- [x] Size matrix (0/1/`chunk`±1/multi-chunk) × ciphers (`stream.rs`); + KDF × armor via `integration.rs`.
+- [x] Tamper coverage for every §10 negative case with the correct error variant.
+- [x] Committed inline KAT vectors (binary + armored); no `tests/vectors/` directory.
 - [x] Suite runs fast with minimal KDF params.
 
 ---
@@ -634,6 +650,8 @@ fast; cost-correctness is already covered in Phase 4.
 
 **Goal:** the shared CLI+TUI glue (§2.2, §6.4–§6.6). Depends only on
 `symcrypt-core` + std + `thiserror` + `tempfile`. No crypto, no format logic.
+**As built**, the crate is split into `lib.rs` + `error.rs` + `fs.rs` +
+`password.rs` (the §2.1 sketch shows a single `lib.rs`).
 
 **Responsibilities & API sketch**
 

@@ -770,4 +770,63 @@ mod tests {
             );
         }
     }
+
+    /// Armored known-answer vector (DESIGN §10, "at least one armored fixture").
+    /// The binary container is the AES-256-GCM/PBKDF2 vector above; this commits
+    /// its ASCII-armored form so the base64 framing (alphabet, 64-col wrap,
+    /// BEGIN/END markers, single trailing LF) is locked across versions. The
+    /// armor layer is applied by wrapping the writer exactly as `lib.rs::encrypt`
+    /// does. To regenerate after an intentional format change, print `armored`.
+    #[test]
+    fn armored_known_answer_vector_is_stable_and_decrypts() {
+        let salt: [u8; SALT_LEN] = std::array::from_fn(|i| i as u8);
+        let nonce: [u8; NONCE_PREFIX_LEN] = std::array::from_fn(|i| (16 + i) as u8);
+        let kat_secret = Secret::new(b"symcrypt known-answer vector", None).unwrap();
+        let plaintext = b"symcrypt v1 known-answer test vector";
+
+        const ARMORED_KAT: &str = concat!(
+            "-----BEGIN SYMCRYPT MESSAGE-----\n",
+            "U1lNQ1JZUFQBAQMAAAAnEAAAAAAAAAAAEAABAgMEBQYHCAkKCwwNDg8HEBESExQV\n",
+            "FgAAEABY62WUj6fxgGgjpRrp3VARHL4ACFHkUW7jrst699pu/mdIwKCszAGMipyy\n",
+            "T6FGvYsu7xRL\n",
+            "-----END SYMCRYPT MESSAGE-----\n",
+        );
+
+        let opts = EncryptOptions {
+            cipher: CipherId::Aes256Gcm,
+            kdf: KdfId::Pbkdf2,
+            kdf_params: KdfParams::Pbkdf2 { iterations: 10_000 },
+            chunk_size: 4096,
+            filename: None,
+            armor: false, // armor is supplied by the ArmorWriter wrapper below
+        };
+
+        let mut armored: Vec<u8> = Vec::new();
+        {
+            let mut w = crate::armor::ArmorWriter::new(&mut armored).unwrap();
+            let mut cb = noop();
+            encrypt_deterministic(
+                plaintext.as_ref(),
+                &mut w,
+                &kat_secret,
+                &opts,
+                None,
+                &mut cb,
+                MAX_PLAINTEXT,
+                &salt,
+                &nonce,
+            )
+            .unwrap();
+            w.finish().unwrap();
+        }
+        let armored = String::from_utf8(armored).expect("armor is ASCII text");
+        assert_eq!(armored, ARMORED_KAT, "armored format drift");
+
+        // The committed armored fixture decrypts through the public auto-dearmor
+        // + stream path back to the plaintext.
+        let mut out = Vec::new();
+        let mut cb = noop();
+        crate::decrypt(armored.as_bytes(), &mut out, &kat_secret, None, &mut cb).unwrap();
+        assert_eq!(out, plaintext);
+    }
 }
