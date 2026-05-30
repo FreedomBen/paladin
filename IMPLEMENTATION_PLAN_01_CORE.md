@@ -10,6 +10,18 @@ order* to build it. Section references below (e.g. §4.3) point into `DESIGN.md`
 If implementation reveals a needed change, update `DESIGN.md` first, then this
 plan, then the code.
 
+> **Status (2026-05-30): Plan 01 is essentially complete.** Per `README.md`
+> ("the shared libraries … are implemented and tested") and the git history
+> (`Add ASCII armor and the public encrypt/decrypt/inspect/verify API`, `Add
+> known-answer vectors and public-API integration tests`, `Add default
+> output-path helpers`, `Implement symcrypt-common terminal glue`), the
+> workspace, `symcrypt-core`, and `symcrypt-common` are already built. The
+> checklists below are ticked to reflect that committed state — they now serve as
+> an as-built spec and a re-verification checklist. Re-run `cargo test` +
+> `cargo clippy --all-targets --all-features` to confirm green.
+> **Caveat:** the project `CLAUDE.md` still says "design phase — there is no Rust
+> code yet"; that line is now stale and should be updated.
+
 ---
 
 ## How to use this plan
@@ -77,12 +89,12 @@ dependencies arrive in plans `02`–`04`. Do **not** add front-end deps
 
 **Checklist**
 
-- [ ] Root workspace manifest with resolver, members, shared package + deps.
-- [ ] `symcrypt-core` crate with all module files stubbed and re-exported.
-- [ ] `symcrypt-common` crate stub.
-- [ ] `symcrypt-cli` (bin `symcrypt`), `symcrypt-tui`, `symcrypt-gtk` placeholders.
-- [ ] Core + common dependencies added and pinned.
-- [ ] `cargo build`, `cargo fmt --check`, `cargo clippy`, `cargo test` all clean.
+- [x] Root workspace manifest with resolver, members, shared package + deps.
+- [x] `symcrypt-core` crate with all module files stubbed and re-exported.
+- [x] `symcrypt-common` crate stub.
+- [x] `symcrypt-cli` (bin `symcrypt`), `symcrypt-tui`, `symcrypt-gtk` placeholders.
+- [x] Core + common dependencies added and pinned.
+- [x] `cargo build`, `cargo fmt --check`, `cargo clippy`, `cargo test` all clean.
 
 ---
 
@@ -119,9 +131,9 @@ pub type Result<T> = std::result::Result<T, SymError>;
 
 **Checklist**
 
-- [ ] `SymError` with all variants from §6.6 + `Result<T>` alias.
-- [ ] `Auth` message conflates wrong-password and tamper (§4.4).
-- [ ] `From<io::Error>` impl + tests.
+- [x] `SymError` with all variants from §6.6 + `Result<T>` alias.
+- [x] `Auth` message conflates wrong-password and tamper (§4.4).
+- [x] `From<io::Error>` impl + tests.
 
 ---
 
@@ -161,10 +173,10 @@ Encoding (exact, §4.2):
 
 **Checklist**
 
-- [ ] `Secret::new` with domain-separated length-prefixed encoding.
-- [ ] Empty-both rejection and keyfile size bounds enforced.
-- [ ] `Zeroizing` wrapper; zeroize-on-drop verified.
-- [ ] All encoding/ambiguity/bounds tests green.
+- [x] `Secret::new` with domain-separated length-prefixed encoding.
+- [x] Empty-both rejection and keyfile size bounds enforced.
+- [x] `Zeroizing` wrapper; zeroize-on-drop verified.
+- [x] All encoding/ambiguity/bounds tests green.
 
 ---
 
@@ -199,9 +211,9 @@ pub(crate) fn open(c: CipherId, key: &[u8;32], nonce: &[u8;12], aad: &[u8], ct: 
 
 **Checklist**
 
-- [ ] `CipherId` enum, id bytes, `FromStr`/`Display` (exact, no aliases).
-- [ ] `seal`/`open` for both ciphers with `Auth` on tag failure.
-- [ ] Round-trip, tamper, length, and name-parsing tests green.
+- [x] `CipherId` enum, id bytes, `FromStr`/`Display` (exact, no aliases).
+- [x] `seal`/`open` for both ciphers with `Auth` on tag failure.
+- [x] Round-trip, tamper, length, and name-parsing tests green.
 
 ---
 
@@ -258,11 +270,11 @@ Defaults (§12): Argon2id `{65536, 3, 1}`; scrypt `{15, 8, 1}`; PBKDF2 `{600000}
 
 **Checklist**
 
-- [ ] `KdfId`/`KdfParams`, id bytes, exact `FromStr`/`Display`.
-- [ ] `ranges_ok` + `from_wire` enforcing every §5.4 bound incl. scrypt mem cap.
-- [ ] `derive_key` for all three KDFs returning a zeroized 32-byte key.
-- [ ] `default_params` matches §12.
-- [ ] Determinism, boundary, reserved-field, and committed-KAT tests green.
+- [x] `KdfId`/`KdfParams`, id bytes, exact `FromStr`/`Display`.
+- [x] `ranges_ok` + `from_wire` enforcing every §5.4 bound incl. scrypt mem cap.
+- [x] `derive_key` for all three KDFs returning a zeroized 32-byte key.
+- [x] `default_params` matches §12.
+- [x] Determinism, boundary, reserved-field, and committed-KAT tests green.
 
 ---
 
@@ -327,10 +339,10 @@ deriving keys, §5.7 / §11):
 
 **Checklist**
 
-- [ ] `Header`, `NameStatus`, `serialize`, `parse` returning raw AAD bytes.
-- [ ] `is_safe_basename` per §5.2 (shared with lib option validation).
-- [ ] Parse validates magic→version→ids→flags→params→lengths→name in order.
-- [ ] Round-trip (all combos), offset, every-rejection, and name-status tests green.
+- [x] `Header`, `NameStatus`, `serialize`, `parse` returning raw AAD bytes.
+- [x] `is_safe_basename` per §5.2 (shared with lib option validation).
+- [x] Parse validates magic→version→ids→flags→params→lengths→name in order.
+- [x] Round-trip (all combos), offset, every-rejection, and name-status tests green.
 
 ---
 
@@ -402,10 +414,10 @@ Rules to implement:
 
 **Checklist**
 
-- [ ] `nonce` builder + tests.
-- [ ] `encrypt_body` with look-ahead finality, counter & size caps, progress.
-- [ ] `decrypt_body` (Decrypt + Verify) with AAD binding and structural→`Auth`.
-- [ ] Round-trip across sizes, tamper/truncate/reorder, caps, cancel tests green.
+- [x] `nonce` builder + tests.
+- [x] `encrypt_body` with look-ahead finality, counter & size caps, progress.
+- [x] `decrypt_body` (Decrypt + Verify) with AAD binding and structural→`Auth`.
+- [x] Round-trip across sizes, tamper/truncate/reorder, caps, cancel tests green.
 
 ---
 
@@ -450,9 +462,9 @@ missing end marker → `MalformedHeader`.
 
 **Checklist**
 
-- [ ] `ArmorWriter` (64-col wrap, LF, markers, explicit `finish`).
-- [ ] `dearmor_if_armored` with peek-based detection and binary pass-through.
-- [ ] Round-trip, shape, accept (LF/CRLF/whitespace), reject, KAT tests green.
+- [x] `ArmorWriter` (64-col wrap, LF, markers, explicit `finish`).
+- [x] `dearmor_if_armored` with peek-based detection and binary pass-through.
+- [x] Round-trip, shape, accept (LF/CRLF/whitespace), reject, KAT tests green.
 
 ---
 
@@ -487,8 +499,8 @@ pub fn default_decrypt_output(input: &Path, header: &Header) -> PathBuf;
 
 **Checklist**
 
-- [ ] `default_encrypt_output` + `default_decrypt_output` per §6.5.
-- [ ] Stored-name, extension-strip, and empty-basename-fallback tests green.
+- [x] `default_encrypt_output` + `default_decrypt_output` per §6.5.
+- [x] Stored-name, extension-strip, and empty-basename-fallback tests green.
 
 ---
 
@@ -569,12 +581,12 @@ always uses `OsRng`.
 
 **Checklist**
 
-- [ ] `EncryptOptions` (+ `Default` = §12), `Progress`, `OnProgress`, constants.
-- [ ] `encrypt` with option validation, OsRng entropy, armor wrap, AAD binding.
-- [ ] `decrypt`/`verify` with `CountingReader`, dearmor, sink-for-verify.
-- [ ] `inspect` returning unauthenticated `Header`.
-- [ ] `encrypt_with_entropy` seam for deterministic KAT.
-- [ ] Smoke round-trip / option-validation / cancel tests green.
+- [x] `EncryptOptions` (+ `Default` = §12), `Progress`, `OnProgress`, constants.
+- [x] `encrypt` with option validation, OsRng entropy, armor wrap, AAD binding.
+- [x] `decrypt`/`verify` with `CountingReader`, dearmor, sink-for-verify.
+- [x] `inspect` returning unauthenticated `Header`.
+- [x] `encrypt_with_entropy` seam for deterministic KAT.
+- [x] Smoke round-trip / option-validation / cancel tests green.
 
 ---
 
@@ -608,10 +620,10 @@ fast; cost-correctness is already covered in Phase 4.
 
 **Checklist**
 
-- [ ] `round_trip.rs` across all size × cipher × KDF × armor combinations.
-- [ ] `tamper.rs` covering every §10 negative case with correct error variant.
-- [ ] `kat.rs` + committed `tests/vectors/` (binary + armored).
-- [ ] Suite runs fast with minimal KDF params.
+- [x] `round_trip.rs` across all size × cipher × KDF × armor combinations.
+- [x] `tamper.rs` covering every §10 negative case with correct error variant.
+- [x] `kat.rs` + committed `tests/vectors/` (binary + armored).
+- [x] Suite runs fast with minimal KDF params.
 
 ---
 
@@ -671,23 +683,23 @@ Rules to enforce (from §6.4/§6.5):
 
 **Checklist**
 
-- [ ] `exit_code` mapping (sole classifier) + tests.
-- [ ] Password-source resolution with exclusivity & empty-source rules.
-- [ ] Password-file / keyfile readers with size caps, `-`/non-regular rejection.
-- [ ] Clobber, same-file (symlink/hardlink), and temp-file `0600` finalization.
-- [ ] `best_effort_remove` warn-but-success behavior.
-- [ ] All `symcrypt-common` unit tests green.
+- [x] `exit_code` mapping (sole classifier) + tests.
+- [x] Password-source resolution with exclusivity & empty-source rules.
+- [x] Password-file / keyfile readers with size caps, `-`/non-regular rejection.
+- [x] Clobber, same-file (symlink/hardlink), and temp-file `0600` finalization.
+- [x] `best_effort_remove` warn-but-success behavior.
+- [x] All `symcrypt-common` unit tests green.
 
 ---
 
 ## Phase 12 — Workspace-wide verification
 
-- [ ] `cargo fmt --check` clean across the workspace.
-- [ ] `cargo clippy --all-targets --all-features` — **zero** warnings.
-- [ ] `cargo test` green for `symcrypt-core` and `symcrypt-common`.
-- [ ] `cargo build --release` succeeds (front-end placeholders included).
-- [ ] `README.md` "Development commands" still match reality; update if drifted.
-- [ ] Confirm the core honors its boundary: a quick grep shows no argv/stdin/
+- [x] `cargo fmt --check` clean across the workspace.
+- [x] `cargo clippy --all-targets --all-features` — **zero** warnings.
+- [x] `cargo test` green for `symcrypt-core` and `symcrypt-common`.
+- [x] `cargo build --release` succeeds (front-end placeholders included).
+- [x] `README.md` "Development commands" still match reality; update if drifted.
+- [x] Confirm the core honors its boundary: a quick grep shows no argv/stdin/
       `std::process::exit`/filesystem access inside `symcrypt-core`.
 
 ---
