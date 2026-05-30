@@ -30,6 +30,6 @@ depend on the crates planned here.
 - [x] `core`: ASCII armor wrap/unwrap + auto-detect.
 - [x] `core`: pure helpers — default output paths, cipher/KDF name parsing.
 - [x] `core`: unit, round-trip, tamper, and KAT tests.
-- [ ] `symcrypt-common`: path-or-stdin I/O, clobber check, best-effort
+- [x] `symcrypt-common`: path-or-stdin I/O, clobber check, best-effort
       remove, password-source resolution, exit-code mapping (+ unit tests).
 - [ ] Docs: project `README`.

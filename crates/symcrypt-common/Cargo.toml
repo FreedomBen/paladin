@@ -14,5 +14,6 @@ workspace = true
 symcrypt-core = { path = "../symcrypt-core" }
 tempfile = "3.27.0"
 thiserror = "2.0.18"
+zeroize = "1.8.2"
 
 [dev-dependencies]

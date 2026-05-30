@@ -642,6 +642,7 @@ dependencies = [
  "symcrypt-core",
  "tempfile",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]
