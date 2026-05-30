@@ -136,14 +136,16 @@ Mirror DESIGN §6.4 semantics in-UI, then hand bytes to the core:
 ### 4.3 Advanced options → `EncryptOptions`
 
 - Cipher/KDF selectors parse via the core `CipherId`/`KdfId` `FromStr` and
-  display via `as_str`, so names stay identical to the CLI (exact lowercase).
+  display via `Display`, so names stay identical to the CLI (exact lowercase).
 - Show only the selected KDF's knobs, prefilled from
-  `KdfParams::default_for(kdf)`; validate against the §5.4 ranges with inline
+  `KdfId::default_params(kdf)`; validate against the §5.4 ranges with inline
   messages and assemble the matching `KdfParams` variant. The core re-validates,
   so the UI check is for fast feedback only.
-- `--name` stores the input basename (Encrypt only); `--armor` wraps output and
-  changes the default extension. `chunk_size` is not user-settable in v1
-  (`EncryptOptions::default()` carries 64 KiB).
+- `--name` stores the input basename (Encrypt only); the basename must be valid
+  UTF-8 (DESIGN §5.2), so toggling `--name` pre-checks it and shows an inline
+  field error otherwise (the core re-validates → `InvalidOptions`/exit 2).
+  `--armor` wraps output and changes the default extension. `chunk_size` is not
+  user-settable in v1 (`EncryptOptions::default()` carries 64 KiB).
 
 ### 4.4 Running an operation (`worker.rs`)
 
@@ -161,8 +163,11 @@ Mirror DESIGN §6.4 semantics in-UI, then hand bytes to the core:
   is set, `common::best_effort_remove(input)` runs and a failure only warns.
 - **Failure / cancel:** drop the sink (its `NamedTempFile` auto-removes the
   partial output); report the result to the UI.
-- The UI drains the channel each tick to redraw a `Gauge` (indeterminate when
-  `total` is `None`) and a status line.
+- The UI drains the channel each tick to redraw a `Gauge` and a status line.
+  Because the TUI streams only regular files (never stdin), `input_len` is always
+  known, so `total` is always `Some` and the gauge is always determinate; the
+  indeterminate (`total == None`) branch is handled defensively but never arises
+  in the TUI.
 
 ### 4.5 Info & Verify
 
@@ -182,9 +187,14 @@ Mirror DESIGN §6.4 semantics in-UI, then hand bytes to the core:
   already running may finish first.
 - Error messages and the **process exit code** come from
   `symcrypt-common` (`exit_code` / `AppError::exit_code`): per-operation
-  failures are shown in-UI without exiting, and the last operation's result maps
-  to the exit status on quit so the shared 0/1/2/3/4/130 contract (DESIGN §6.6)
-  still holds for callers that launch the TUI.
+  failures are shown in-UI without exiting, and the last **completed**
+  operation's result maps to the exit status on a normal quit (success → 0, auth
+  failure → 3, and so on). A user-acknowledged cancellation is non-error — it
+  resets the pending status to idle and never sets a sticky non-zero exit. Exit
+  **130** is reserved for `Ctrl-C` terminating the process while an operation is
+  running (the worker's temporary output is removed during teardown). This keeps
+  the shared 0/1/2/3/4/130 contract (DESIGN §6.6) intact for callers that launch
+  the TUI.
 
 ### 4.7 Keys & help
 
@@ -206,7 +216,7 @@ Mirror DESIGN §6.4 semantics in-UI, then hand bytes to the core:
 | Remove input after success        | `common::best_effort_remove(&input)`                              |
 | Read keyfile                      | `common::read_keyfile(&path)`                                     |
 | Assemble secret                   | `core::Secret::new(&password, keyfile.as_deref())`               |
-| Build options                     | `core::EncryptOptions { .. }`, `core::KdfParams::default_for`     |
+| Build options                     | `core::EncryptOptions { .. }`, `core::KdfId::default_params`      |
 | Prefill output (enc / dec)        | `core::default_encrypt_output` / `core::inspect` + `default_decrypt_output` |
 | Run                               | `core::{encrypt, decrypt, inspect, verify}` with `OnProgress`     |
 | Map error → exit code / message   | `common::exit_code` / `AppError::exit_code`                       |
@@ -228,11 +238,14 @@ logic into pure, unit-tested functions (`options.rs`, `field.rs`) and keep
   matching, non-empty confirm; empty password + empty keyfile is rejected.
 - **Options mapping:** UI state → `EncryptOptions`/`KdfParams` for each
   cipher/KDF; out-of-range knobs are caught with the §5.4 message before the core
-  is called; cipher/KDF names round-trip through `FromStr`/`as_str`.
+  is called; a non-UTF-8 `--name` basename is rejected with an inline error
+  before the core is called; cipher/KDF names round-trip through
+  `FromStr`/`Display`.
 - **Line editor (`field.rs`):** insert/delete, cursor moves, Home/End, and
   masking render.
 - **Exit-code passthrough:** `SymError` variants map to the shared codes via
-  `common::exit_code`.
+  `common::exit_code`; a user-acknowledged cancel leaves the exit status at the
+  last completed operation's code (not 130) on a normal quit.
 
 Headless terminal-driver tests over a ratatui `TestBackend` are a stretch goal
 for the static layout; the four operations are already covered exhaustively in
