@@ -28,7 +28,7 @@ depend on the crates planned here.
 - [x] `core`: header serialize / parse (+ optional filename, flags, versioning).
 - [x] `core`: STREAM chunked encrypt/decrypt with progress + cancellation.
 - [x] `core`: ASCII armor wrap/unwrap + auto-detect.
-- [ ] `core`: pure helpers — default output paths, cipher/KDF name parsing.
+- [x] `core`: pure helpers — default output paths, cipher/KDF name parsing.
 - [ ] `core`: unit, round-trip, tamper, and KAT tests.
 - [ ] `symcrypt-common`: path-or-stdin I/O, clobber check, best-effort
       remove, password-source resolution, exit-code mapping (+ unit tests).

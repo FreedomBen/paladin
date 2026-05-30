@@ -16,6 +16,7 @@ mod cipher;
 mod error;
 mod header;
 mod kdf;
+mod paths;
 mod secret;
 mod stream;
 
@@ -23,6 +24,7 @@ pub use cipher::CipherId;
 pub use error::{Result, SymError};
 pub use header::{Header, NameStatus};
 pub use kdf::{KdfId, KdfParams};
+pub use paths::{default_decrypt_output, default_encrypt_output};
 pub use secret::{Secret, KEYFILE_MAX_BYTES};
 pub use stream::{EncryptOptions, OnProgress, Progress};
 
