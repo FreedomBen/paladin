@@ -130,7 +130,14 @@ fn read_up_to<R: Read>(reader: &mut R, max: usize) -> Result<Vec<u8>> {
             Ok(0) => break,
             Ok(n) => filled += n,
             Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(SymError::Io(e)),
+            // Recover an armor framing error (e.g. MalformedHeader) wrapped by
+            // the reader; otherwise it is a genuine I/O error.
+            Err(e) => {
+                return Err(match crate::error::recover_symerror(e) {
+                    Ok(sym) => sym,
+                    Err(e) => SymError::Io(e),
+                })
+            }
         }
     }
     buf.truncate(filled);
@@ -139,8 +146,6 @@ fn read_up_to<R: Read>(reader: &mut R, max: usize) -> Result<Vec<u8>> {
 
 /// Encrypt `input` to `output` (binary container) with the DESIGN §12 default
 /// 64 GiB plaintext cap.
-// Composed with armor into the public API in a later core task.
-#[allow(dead_code)]
 pub(crate) fn encrypt<R: Read, W: Write>(
     input: R,
     output: W,
@@ -228,8 +233,6 @@ fn encrypt_impl<R: Read, W: Write>(
 }
 
 /// Decrypt the binary container in `input` to `output`, verifying every tag.
-// Composed with armor into the public API in a later core task.
-#[allow(dead_code)]
 pub(crate) fn decrypt<R: Read, W: Write>(
     input: R,
     output: W,
@@ -241,8 +244,6 @@ pub(crate) fn decrypt<R: Read, W: Write>(
 }
 
 /// Verify integrity by decrypting and discarding the plaintext (DESIGN §6.2).
-// Composed with armor into the public API in a later core task.
-#[allow(dead_code)]
 pub(crate) fn verify<R: Read>(
     input: R,
     secret: &Secret,
@@ -278,7 +279,7 @@ fn decrypt_impl<R: Read, W: Write>(
     let cipher = Cipher::new(header.cipher, &key);
     let on_disk_max = header.chunk_size as usize + TAG_LEN;
     let mut counter: u32 = 0;
-    let mut input_done: u64 = header.serialized.len() as u64;
+    let mut input_done: u64 = header.aad().len() as u64;
     let mut plaintext_len: u64 = 0;
 
     let mut cur = read_up_to(&mut input, on_disk_max)?;
@@ -296,11 +297,7 @@ fn decrypt_impl<R: Read, W: Write>(
         }
 
         let nonce = make_nonce(&header.nonce_prefix, counter, is_final);
-        let aad: &[u8] = if counter == 0 {
-            &header.serialized
-        } else {
-            &[]
-        };
+        let aad: &[u8] = if counter == 0 { header.aad() } else { &[] };
         let plaintext = cipher.open(&nonce, aad, &cur)?;
 
         plaintext_len += plaintext.len() as u64;

@@ -59,8 +59,6 @@ impl Secret {
 
     /// Whether a keyfile contributed to this secret. Used to set the advisory
     /// `keyfile-used` header flag (DESIGN §4.2, bit1).
-    // Wired up by stream.rs in a later core task.
-    #[allow(dead_code)]
     pub(crate) fn has_keyfile(&self) -> bool {
         self.keyfile.is_some()
     }
@@ -71,8 +69,6 @@ impl Secret {
     /// The result is wrapped in [`Zeroizing`] so it is wiped after key
     /// derivation. The exact capacity is reserved up front so the buffer never
     /// reallocates and leaves a stale copy of secret bytes behind.
-    // Wired up by kdf.rs in a later core task.
-    #[allow(dead_code)]
     pub(crate) fn kdf_input(&self) -> Zeroizing<Vec<u8>> {
         let pw: &[u8] = &self.password;
         let kf: &[u8] = self.keyfile.as_ref().map(|k| k.as_slice()).unwrap_or(&[]);

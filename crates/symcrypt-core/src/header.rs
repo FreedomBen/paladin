@@ -96,8 +96,6 @@ impl Header {
     }
 
     /// The serialized header bytes used as chunk-0 AAD (DESIGN §5.1).
-    // Wired up by the decrypt/verify path in a later core task.
-    #[allow(dead_code)]
     pub(crate) fn aad(&self) -> &[u8] {
         &self.serialized
     }
@@ -109,8 +107,6 @@ impl Header {
 ///
 /// Shared by header parsing (to classify a stored name) and by encrypt-option
 /// validation (to reject an unsafe `--name`).
-// Wired up by the encrypt path in a later core task; already used by parse.
-#[allow(dead_code)]
 pub(crate) fn is_safe_basename(name: &str) -> bool {
     if !NAME_LEN.contains(&name.len()) || name == "." || name == ".." {
         return false;
@@ -123,8 +119,6 @@ pub(crate) fn is_safe_basename(name: &str) -> bool {
 /// Serialize a header from already-validated components (DESIGN §5.2). The
 /// encrypt path validates everything first, so this performs no checks; the
 /// returned bytes are both written to the output and used as chunk-0 AAD.
-// Wired up by the encrypt path in a later core task.
-#[allow(dead_code)]
 pub(crate) fn serialize(
     cipher: CipherId,
     kdf_params: KdfParams,
@@ -167,8 +161,6 @@ pub(crate) fn serialize(
 /// Parse and validate a header from `reader`, leaving it positioned at the first
 /// body byte. The returned [`Header`] retains the serialized bytes for use as
 /// chunk-0 AAD (DESIGN §5.1).
-// Wired up by inspect/decrypt/verify in a later core task.
-#[allow(dead_code)]
 pub(crate) fn parse<R: Read>(reader: &mut R) -> Result<Header> {
     let mut h: Vec<u8> = Vec::with_capacity(64);
 
@@ -269,18 +261,21 @@ pub(crate) fn parse<R: Read>(reader: &mut R) -> Result<Header> {
 }
 
 /// Read exactly `n` bytes from `reader`, appending them to `sink`. A short read
-/// (truncated header) becomes [`SymError::MalformedHeader`]; other I/O errors
+/// (truncated header) becomes [`SymError::MalformedHeader`]; a framing error
+/// from the armor layer is recovered with its original variant; other I/O errors
 /// propagate as [`SymError::Io`].
 fn read_field<R: Read>(reader: &mut R, sink: &mut Vec<u8>, n: usize) -> Result<()> {
     let start = sink.len();
     sink.resize(start + n, 0);
-    reader.read_exact(&mut sink[start..]).map_err(|e| {
-        if e.kind() == io::ErrorKind::UnexpectedEof {
-            SymError::MalformedHeader("unexpected end of input before header was complete")
-        } else {
-            SymError::Io(e)
-        }
-    })
+    reader
+        .read_exact(&mut sink[start..])
+        .map_err(|e| match crate::error::recover_symerror(e) {
+            Ok(sym) => sym,
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                SymError::MalformedHeader("unexpected end of input before header was complete")
+            }
+            Err(e) => SymError::Io(e),
+        })
 }
 
 #[cfg(test)]

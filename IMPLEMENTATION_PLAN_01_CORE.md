@@ -27,7 +27,7 @@ depend on the crates planned here.
 - [x] `core`: KDF dispatch (Argon2id, scrypt, PBKDF2) + param encoding + defaults.
 - [x] `core`: header serialize / parse (+ optional filename, flags, versioning).
 - [x] `core`: STREAM chunked encrypt/decrypt with progress + cancellation.
-- [ ] `core`: ASCII armor wrap/unwrap + auto-detect.
+- [x] `core`: ASCII armor wrap/unwrap + auto-detect.
 - [ ] `core`: pure helpers — default output paths, cipher/KDF name parsing.
 - [ ] `core`: unit, round-trip, tamper, and KAT tests.
 - [ ] `symcrypt-common`: path-or-stdin I/O, clobber check, best-effort

@@ -74,6 +74,18 @@ pub enum SymError {
     Io(#[from] io::Error),
 }
 
+/// Recover a [`SymError`] that the armor layer wrapped in an `io::Error` (via
+/// `io::Error::other`) so it can surface through the `Read` interface with its
+/// original variant and exit code. Returns the original `io::Error` untouched
+/// when it does not carry a `SymError`.
+pub(crate) fn recover_symerror(e: io::Error) -> std::result::Result<SymError, io::Error> {
+    if e.get_ref().is_some_and(|inner| inner.is::<SymError>()) {
+        Ok(*e.into_inner().unwrap().downcast::<SymError>().unwrap())
+    } else {
+        Err(e)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

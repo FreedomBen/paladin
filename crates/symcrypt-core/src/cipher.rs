@@ -34,8 +34,6 @@ impl CipherId {
     }
 
     /// On-disk `cipher_id` byte (DESIGN §5.3).
-    // Wired up by header.rs in a later core task.
-    #[allow(dead_code)]
     pub(crate) fn id(self) -> u8 {
         match self {
             CipherId::Aes256Gcm => 0x01,
@@ -45,8 +43,6 @@ impl CipherId {
 
     /// Parse a `cipher_id` byte read from a header. An unrecognized id is
     /// [`SymError::UnknownCipher`] (exit 4), never a guess.
-    // Wired up by header.rs in a later core task.
-    #[allow(dead_code)]
     pub(crate) fn from_id(id: u8) -> Result<Self> {
         match id {
             0x01 => Ok(CipherId::Aes256Gcm),
@@ -80,14 +76,11 @@ impl FromStr for CipherId {
 
 /// A keyed AEAD instance. Both variants are boxed so the enum stays small and
 /// uniform regardless of the ciphers' differing key-schedule sizes.
-// Wired up by stream.rs in a later core task.
-#[allow(dead_code)]
 pub(crate) enum Cipher {
     Aes(Box<Aes256Gcm>),
     Cha(Box<ChaCha20Poly1305>),
 }
 
-#[allow(dead_code)]
 impl Cipher {
     /// Key the selected AEAD with the 32-byte derived key.
     pub(crate) fn new(id: CipherId, key: &[u8; 32]) -> Self {

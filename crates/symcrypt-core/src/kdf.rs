@@ -54,8 +54,6 @@ impl KdfId {
     }
 
     /// On-disk `kdf_id` byte (DESIGN §5.3).
-    // Wired up by header.rs in a later core task.
-    #[allow(dead_code)]
     pub(crate) fn id(self) -> u8 {
         match self {
             KdfId::Argon2id => 0x01,
@@ -66,8 +64,6 @@ impl KdfId {
 
     /// Parse a `kdf_id` byte read from a header. An unrecognized id is
     /// [`SymError::UnknownKdf`] (exit 4), never a guess.
-    // Wired up by header.rs in a later core task.
-    #[allow(dead_code)]
     pub(crate) fn from_id(id: u8) -> Result<Self> {
         match id {
             0x01 => Ok(KdfId::Argon2id),
@@ -149,8 +145,6 @@ impl KdfParams {
 
     /// Encode as the three `kdf_p*` header words (DESIGN §5.4). PBKDF2's reserved
     /// words are 0.
-    // Wired up by header.rs in a later core task.
-    #[allow(dead_code)]
     pub(crate) fn to_words(self) -> (u32, u32, u32) {
         match self {
             KdfParams::Argon2id {
@@ -167,8 +161,6 @@ impl KdfParams {
     /// parameters. Enforces PBKDF2's reserved-zero rule and all §5.4 ranges,
     /// returning the failing check's name so the caller can map it to
     /// `MalformedHeader`. Validation precedes any key derivation.
-    // Wired up by header.rs in a later core task.
-    #[allow(dead_code)]
     pub(crate) fn from_words(
         kdf: KdfId,
         p1: u32,
@@ -200,8 +192,6 @@ impl KdfParams {
     /// Validate the cost parameters against the §5.4 ranges, returning the
     /// failing check's name. The caller maps it to `MalformedHeader` (header
     /// read) or `InvalidOptions` (user-supplied) per DESIGN §5.4.
-    // Wired up by header.rs / the encrypt path in a later core task.
-    #[allow(dead_code)]
     pub(crate) fn validate(&self) -> std::result::Result<(), &'static str> {
         match *self {
             KdfParams::Argon2id {
@@ -253,8 +243,6 @@ impl KdfParams {
     /// flows validate before deriving. A theoretical resource/param failure on
     /// validated input is mapped to a general error (exit 1) rather than
     /// panicking, since the core never exits the process.
-    // Wired up by stream.rs in a later core task.
-    #[allow(dead_code)]
     pub(crate) fn derive_key(
         &self,
         secret_input: &[u8],
