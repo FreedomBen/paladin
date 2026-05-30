@@ -145,7 +145,7 @@ fn read_up_to<R: Read>(reader: &mut R, max: usize) -> Result<Vec<u8>> {
 }
 
 /// Encrypt `input` to `output` (binary container) with the DESIGN §12 default
-/// 64 GiB plaintext cap.
+/// 64 GiB plaintext cap, generating a fresh OS-random salt and nonce prefix.
 pub(crate) fn encrypt<R: Read, W: Write>(
     input: R,
     output: W,
@@ -154,7 +154,11 @@ pub(crate) fn encrypt<R: Read, W: Write>(
     input_len: Option<u64>,
     on_progress: &mut OnProgress<'_>,
 ) -> Result<()> {
-    encrypt_impl(
+    let mut salt = [0u8; SALT_LEN];
+    fill_random(&mut salt)?;
+    let mut nonce_prefix = [0u8; NONCE_PREFIX_LEN];
+    fill_random(&mut nonce_prefix)?;
+    encrypt_deterministic(
         input,
         output,
         secret,
@@ -162,11 +166,17 @@ pub(crate) fn encrypt<R: Read, W: Write>(
         input_len,
         on_progress,
         MAX_PLAINTEXT,
+        &salt,
+        &nonce_prefix,
     )
 }
 
+/// The core encrypt path with an explicit salt, nonce prefix, and plaintext cap.
+/// Production ([`encrypt`]) supplies OS-random values; tests supply fixed values
+/// to produce reproducible known-answer vectors and to exercise the size cap
+/// cheaply. A real file always uses fresh randomness.
 #[allow(clippy::too_many_arguments)]
-fn encrypt_impl<R: Read, W: Write>(
+fn encrypt_deterministic<R: Read, W: Write>(
     mut input: R,
     mut output: W,
     secret: &Secret,
@@ -174,28 +184,25 @@ fn encrypt_impl<R: Read, W: Write>(
     input_len: Option<u64>,
     on_progress: &mut OnProgress<'_>,
     max_plaintext: u64,
+    salt: &[u8; SALT_LEN],
+    nonce_prefix: &[u8; NONCE_PREFIX_LEN],
 ) -> Result<()> {
     opts.validate()?;
     report(on_progress, 0, input_len)?; // cancel before key derivation
-
-    let mut salt = [0u8; SALT_LEN];
-    fill_random(&mut salt)?;
-    let mut nonce_prefix = [0u8; NONCE_PREFIX_LEN];
-    fill_random(&mut nonce_prefix)?;
 
     // Serialize the header (also chunk-0 AAD) before deriving the key, so a
     // cancellation during the expensive KDF leaves the output untouched.
     let header_bytes = header::serialize(
         opts.cipher,
         opts.kdf_params,
-        &salt,
-        &nonce_prefix,
+        salt,
+        nonce_prefix,
         opts.chunk_size,
         opts.filename.as_deref(),
         secret.has_keyfile(),
     );
 
-    let key = opts.kdf_params.derive_key(&secret.kdf_input(), &salt)?;
+    let key = opts.kdf_params.derive_key(&secret.kdf_input(), salt)?;
     report(on_progress, 0, input_len)?; // cancel after key derivation (output still empty)
 
     output.write_all(&header_bytes).map_err(SymError::Io)?;
@@ -215,7 +222,7 @@ fn encrypt_impl<R: Read, W: Write>(
             return Err(SymError::InputTooLarge);
         }
 
-        let nonce = make_nonce(&nonce_prefix, counter, is_final);
+        let nonce = make_nonce(nonce_prefix, counter, is_final);
         let aad: &[u8] = if counter == 0 { &header_bytes } else { &[] };
         let sealed = cipher.seal(&nonce, aad, &cur)?;
         output.write_all(&sealed).map_err(SymError::Io)?;
@@ -620,7 +627,7 @@ mod tests {
         let mut out = Vec::new();
         let mut cb = noop();
         let data = [7u8; 200];
-        let err = encrypt_impl(
+        let err = encrypt_deterministic(
             data.as_slice(),
             &mut out,
             &secret(),
@@ -628,6 +635,8 @@ mod tests {
             None,
             &mut cb,
             100,
+            &[0u8; SALT_LEN],
+            &[0u8; NONCE_PREFIX_LEN],
         );
         assert!(matches!(err, Err(SymError::InputTooLarge)));
     }
@@ -680,5 +689,85 @@ mod tests {
         let n0 = make_nonce(&prefix, 0, false);
         assert_eq!(&n0[7..11], &[0, 0, 0, 0]);
         assert_eq!(n0[11], 0x00);
+    }
+
+    /// Known-answer vectors (DESIGN §10): committed ciphertext for fixed inputs
+    /// produced with a deterministic salt/nonce source, so an accidental format
+    /// change is caught across versions. Production encryption always uses OS
+    /// randomness. To regenerate after an intentional format change, print
+    /// `hex::encode(&out)` for each vector and paste the result below.
+    #[test]
+    fn known_answer_vectors_are_stable_and_decrypt() {
+        let salt: [u8; SALT_LEN] = std::array::from_fn(|i| i as u8);
+        let nonce: [u8; NONCE_PREFIX_LEN] = std::array::from_fn(|i| (16 + i) as u8);
+        let kat_secret = Secret::new(b"symcrypt known-answer vector", None).unwrap();
+        let plaintext = b"symcrypt v1 known-answer test vector";
+
+        let vectors = [
+            (
+                CipherId::Aes256Gcm,
+                KdfId::Pbkdf2,
+                KdfParams::Pbkdf2 { iterations: 10_000 },
+                "53594d43525950540101030000002710000000000000000010000102030405060708090a0b0c0d0e0f07101112131415160000100058eb65948fa7f1806823a51ae9dd50111cbe000851e4516ee3aecb7af7da6efe6748c0a0accc018c8a9cb24fa146bd8b2eef144b",
+            ),
+            (
+                CipherId::ChaCha20Poly1305,
+                KdfId::Argon2id,
+                KdfParams::Argon2id {
+                    memory_kib: 8192,
+                    time_cost: 1,
+                    parallelism: 1,
+                },
+                "53594d43525950540102010000002000000000010000000110000102030405060708090a0b0c0d0e0f07101112131415160000100098051afe257ade48fe282bac9e9c5a99305bcc6d7be0298034d5e6aaaae9100221546da01a20da7c590e31c806da8cd147736d7c",
+            ),
+        ];
+
+        for (cipher, kdf, kdf_params, expected_hex) in vectors {
+            let opts = EncryptOptions {
+                cipher,
+                kdf,
+                kdf_params,
+                chunk_size: 4096,
+                filename: None,
+                armor: false,
+            };
+            let mut out = Vec::new();
+            let mut cb = noop();
+            encrypt_deterministic(
+                plaintext.as_ref(),
+                &mut out,
+                &kat_secret,
+                &opts,
+                None,
+                &mut cb,
+                MAX_PLAINTEXT,
+                &salt,
+                &nonce,
+            )
+            .unwrap();
+            assert_eq!(
+                hex::encode(&out),
+                expected_hex,
+                "format drift for {cipher}/{kdf}"
+            );
+
+            // The committed vector must also decrypt back to the plaintext,
+            // proving the encrypt and decrypt paths agree on the format.
+            let committed = hex::decode(expected_hex).unwrap();
+            let mut dec_out = Vec::new();
+            let mut cb = noop();
+            decrypt(
+                committed.as_slice(),
+                &mut dec_out,
+                &kat_secret,
+                None,
+                &mut cb,
+            )
+            .unwrap();
+            assert_eq!(
+                dec_out, plaintext,
+                "vector did not decrypt for {cipher}/{kdf}"
+            );
+        }
     }
 }
