@@ -145,9 +145,12 @@ length-prefixed secret input (§4.2), zeroized on drop.
 **API sketch**
 
 ```rust
+/// Upper bound on keyfile size, enforced by `Secret::new` (§4.2). Front-ends
+/// reuse this constant so their keyfile read cap matches the core's validation.
+pub const KEYFILE_MAX_BYTES: usize = 1 << 20; // 1 MiB
 pub struct Secret { input: Zeroizing<Vec<u8>>, has_keyfile: bool }
 impl Secret {
-    /// password may be empty iff keyfile is Some(1..=1 MiB). Both empty → InvalidOptions.
+    /// password may be empty iff keyfile is Some(1..=KEYFILE_MAX_BYTES). Both empty → InvalidOptions.
     pub fn new(password: &[u8], keyfile: Option<&[u8]>) -> Result<Self>;
     pub(crate) fn input(&self) -> &[u8];     // fed to the KDF
     pub(crate) fn has_keyfile(&self) -> bool; // drives header flag bit1 (§4.2)

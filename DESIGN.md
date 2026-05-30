@@ -817,7 +817,7 @@ selected mode, input/output paths, password + confirm, keyfile-only choice,
 advanced options (cipher, KDF, KDF-specific cost knobs, keyfile, `--name`,
 armor, remove-input-after-success, and overwrite approval for the selected
 output path), and run status/progress. UI events become `Input` messages —
-`SetInputFile`, `PickOutput`, `SetPassword`, `SetKeyfile`, `ToggleAdvanced`,
+`SetInputFile`, `BrowseOutput`, `SetOutput`, `SetPassword`, `SetKeyfile`, `ToggleAdvanced`,
 `Run`, `Cancel` — handled in `update`, which mutates the model and re-renders.
 The model never calls crypto directly; it builds a `Secret` + `EncryptOptions`
 and invokes the core.

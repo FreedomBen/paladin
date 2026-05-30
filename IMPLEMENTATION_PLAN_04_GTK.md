@@ -37,10 +37,10 @@ only calls these — it never re-derives behavior:
 | `Secret::new(password, keyfile)` · `KEYFILE_MAX_BYTES` | Assemble the secret; reject empty+empty; bound keyfile size. |
 | `EncryptOptions` · `CipherId` · `KdfId` · `KdfParams::default_for(kdf)` | Build encrypt options from the Advanced controls. |
 | `Progress { done, total }` · `OnProgress` (`-> ControlFlow<()>`) | Stream progress; `Break` cancels. |
-| `Header` (`version`, `cipher`, `kdf()`, `kdf_params`, `flags`, `keyfile_hint()`, `chunk_size`, `salt_len()`, `nonce_prefix_len()`, `name`, `name_status`) · `NameStatus` | Render Info mode. |
+| `Header` (`version`, `cipher`, `kdf`, `kdf_params`, `flags`, `keyfile_hint`, `chunk_size`, `salt_len`, `nonce_prefix_len`, `name`, `name_status`) · `NameStatus` | Render Info mode. |
 | `SymError` (`Auth`, `BadMagic`, `UnsupportedVersion`, `UnknownCipher`, `UnknownKdf`, `ReservedFlags`, `MalformedHeader`, `InvalidOptions`, `InputTooLarge`, `Canceled`, `Io`) | Map to user-facing toast/dialog text. |
 
-`CipherId`/`KdfId` provide `as_str()` and `FromStr`/`Display` (exact lowercase
+`CipherId`/`KdfId` provide `FromStr`/`Display` (exact lowercase
 names, no aliases) so the Advanced selectors and Info display reuse the shared
 vocabulary.
 
@@ -125,7 +125,7 @@ state. A KDF call already in flight may finish before the flag is observed.
 | --- | --- |
 | `-f, --force` | Native save-dialog overwrite confirmation; for typed/prefilled existing paths, `Run` confirms before finalizing. No approval ⇒ refuse (DESIGN §8.2). |
 | `--remove` | Advanced toggle; best-effort delete input after success; on failure, warn via toast but keep the output and treat the run as successful (DESIGN §6.5). |
-| `--name` | Advanced toggle; derive the input **basename** and pass via `EncryptOptions.filename`; core validates and returns `InvalidOptions` for unsafe/over-long names (DESIGN §5.2, §5.4). |
+| `--name` | Advanced toggle; derive the input **basename** and pass via `EncryptOptions.filename`; core validates and returns `InvalidOptions` for unsafe/over-long names (DESIGN §5.2, §5.4). A basename that is not valid UTF-8 (so it cannot become the `Option<String>` core validates) is surfaced by `options.rs` as a user-facing error toast before `Run` proceeds, never silently dropped (DESIGN §6.4). |
 | `-a, --armor` | Encrypt-only toggle; flips the prefilled extension via `default_encrypt_output(.., armor)`. Decrypt/Verify/Info auto-detect. |
 | `-k, --keyfile` | Keyfile chooser row (Encrypt/Decrypt/Verify); read via `fsio`, 1 B..=1 MiB, combined with the password. |
 | keyfile-only (`--no-password`) | Keyfile-only toggle; allowed only with a keyfile; empty password accepted only here (DESIGN §6.4). |
