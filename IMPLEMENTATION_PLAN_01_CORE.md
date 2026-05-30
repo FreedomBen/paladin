@@ -32,4 +32,4 @@ depend on the crates planned here.
 - [x] `core`: unit, round-trip, tamper, and KAT tests.
 - [x] `symcrypt-common`: path-or-stdin I/O, clobber check, best-effort
       remove, password-source resolution, exit-code mapping (+ unit tests).
-- [ ] Docs: project `README`.
+- [x] Docs: project `README`.
