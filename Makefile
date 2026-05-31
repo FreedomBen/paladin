@@ -19,12 +19,18 @@ BIN         := symcrypt
 MAN1        := crates/symcrypt-cli/symcrypt.1
 RELEASE_BIN := target/release/$(BIN)
 
+# The TUI package `symcrypt-tui` builds a binary of the same name.
+TUI_PKG         := symcrypt-tui
+TUI_BIN         := symcrypt-tui
+TUI_MAN1        := docs/symcrypt-tui.1
+TUI_RELEASE_BIN := target/release/$(TUI_BIN)
+
 # Extra arguments for `make run`, e.g. `make run ARGS="-e file.txt"`.
 ARGS ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: all build release check test lint fmt fmt-check ci doc run install uninstall clean help
+.PHONY: all build release check test lint fmt fmt-check ci doc run run-tui install install-tui uninstall uninstall-tui clean help
 
 all: build ## Build the whole workspace (alias for `build`)
 
@@ -57,6 +63,9 @@ doc: ## Build API documentation for the workspace crates
 run: ## Run the symcrypt CLI; pass ARGS="..." for options
 	$(CARGO) run -p $(CLI_PKG) -- $(ARGS)
 
+run-tui: ## Run the symcrypt-tui terminal app
+	$(CARGO) run -p $(TUI_PKG)
+
 install: ## Install the symcrypt binary and man page under PREFIX (default /usr/local)
 	$(CARGO) build --release -p $(CLI_PKG)
 	$(INSTALL) -d "$(DESTDIR)$(BINDIR)"
@@ -64,15 +73,26 @@ install: ## Install the symcrypt binary and man page under PREFIX (default /usr/
 	$(INSTALL) -d "$(DESTDIR)$(MAN1DIR)"
 	$(INSTALL) -m 0644 "$(MAN1)" "$(DESTDIR)$(MAN1DIR)/$(BIN).1"
 
+install-tui: ## Install the symcrypt-tui binary and man page under PREFIX
+	$(CARGO) build --release -p $(TUI_PKG)
+	$(INSTALL) -d "$(DESTDIR)$(BINDIR)"
+	$(INSTALL) -m 0755 "$(TUI_RELEASE_BIN)" "$(DESTDIR)$(BINDIR)/$(TUI_BIN)"
+	$(INSTALL) -d "$(DESTDIR)$(MAN1DIR)"
+	$(INSTALL) -m 0644 "$(TUI_MAN1)" "$(DESTDIR)$(MAN1DIR)/$(TUI_BIN).1"
+
 uninstall: ## Remove the installed binary and man page
 	rm -f "$(DESTDIR)$(BINDIR)/$(BIN)"
 	rm -f "$(DESTDIR)$(MAN1DIR)/$(BIN).1"
+
+uninstall-tui: ## Remove the installed symcrypt-tui binary and man page
+	rm -f "$(DESTDIR)$(BINDIR)/$(TUI_BIN)"
+	rm -f "$(DESTDIR)$(MAN1DIR)/$(TUI_BIN).1"
 
 clean: ## Remove build artifacts (cargo clean)
 	$(CARGO) clean
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "; printf "symcrypt — available targets:\n\n"} \
-		/^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}' \
+		/^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}' \
 		$(MAKEFILE_LIST)
 	@printf "\nPaths: PREFIX=%s  BINDIR=%s  MAN1DIR=%s\n" "$(PREFIX)" "$(BINDIR)" "$(MAN1DIR)"

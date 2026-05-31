@@ -1,9 +1,10 @@
 # symcrypt — Implementation plan 03: TUI (`symcrypt-tui`)
 
-**Status:** Expanded and ready to implement. `symcrypt-core` and
-`symcrypt-common` are complete (see
+**Status:** Implemented and tested. `symcrypt-core` and `symcrypt-common` are
+complete (see
 [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md)); the TUI
-builds only on their public APIs and adds no crypto or format logic.
+builds only on their public APIs and adds no crypto or format logic. The
+checklist below is fully checked off.
 
 **Target stack:** Rust 1.94+, [ratatui](https://ratatui.rs/) widgets/layout over
 [crossterm](https://docs.rs/crossterm) (raw mode, key + resize events).
@@ -266,56 +267,56 @@ for the static layout; the four operations are already covered exhaustively in
 
 **Phase 0 — Scaffold**
 
-- [ ] Add deps via `cargo add` (ratatui, crossterm, clap derive, zeroize,
+- [x] Add deps via `cargo add` (ratatui, crossterm, clap derive, zeroize,
       anyhow) + `symcrypt-core`/`symcrypt-common` path deps.
-- [ ] Terminal setup/teardown: raw mode + alternate screen, panic-safe restore,
+- [x] Terminal setup/teardown: raw mode + alternate screen, panic-safe restore,
       `main` mapping startup errors via `common`.
-- [ ] App skeleton renders an empty form; `Esc`/`Ctrl-C` quit cleanly.
+- [x] App skeleton renders an empty form; `Esc`/`Ctrl-C` quit cleanly.
 
 **Phase 1 — State & rendering**
 
-- [ ] `App` state (mode, fields, focus, advanced, status, progress).
-- [ ] Mode tabs + per-mode field layout; footer hints; `?` help overlay.
+- [x] `App` state (mode, fields, focus, advanced, status, progress).
+- [x] Mode tabs + per-mode field layout; footer hints; `?` help overlay.
 
 **Phase 2 — Input & navigation**
 
-- [ ] `field::Editor` line editor (cursor/insert/delete/Home/End) + unit tests.
-- [ ] Focus navigation (`Tab`/`Shift-Tab`, selector `←/→`, `Space` toggles).
-- [ ] Masked password + confirm fields with show/hide toggle.
+- [x] `field::Editor` line editor (cursor/insert/delete/Home/End) + unit tests.
+- [x] Focus navigation (`Tab`/`Shift-Tab`, selector `←/→`, `Space` toggles).
+- [x] Masked password + confirm fields with show/hide toggle.
 
 **Phase 3 — Paths & prefill**
 
-- [ ] Reject `-`; `require_regular_file` validation with inline errors.
-- [ ] Output prefill (Encrypt via `default_encrypt_output`; Decrypt via
+- [x] Reject `-`; `require_regular_file` validation with inline errors.
+- [x] Output prefill (Encrypt via `default_encrypt_output`; Decrypt via
       `inspect` + `default_decrypt_output`) with dirty-flag + armor-extension
       switch.
 
 **Phase 4 — Options & secret**
 
-- [ ] Advanced toggles, cipher/KDF selectors, per-KDF cost knobs (prefilled,
+- [x] Advanced toggles, cipher/KDF selectors, per-KDF cost knobs (prefilled,
       range-checked).
-- [ ] Pure UI-state → `EncryptOptions`/`KdfParams` mapping (+ tests).
-- [ ] Password/keyfile → `Secret` assembly with §6.4 validation (+ tests).
+- [x] Pure UI-state → `EncryptOptions`/`KdfParams` mapping (+ tests).
+- [x] Password/keyfile → `Secret` assembly with §6.4 validation (+ tests).
 
 **Phase 5 — Execution**
 
-- [ ] Worker thread + `mpsc` `Progress` channel + cancel `AtomicBool`.
-- [ ] Encrypt/Decrypt/Verify via core; `OutputSink::commit`; `--remove` via
+- [x] Worker thread + `mpsc` `Progress` channel + cancel `AtomicBool`.
+- [x] Encrypt/Decrypt/Verify via core; `OutputSink::commit`; `--remove` via
       `best_effort_remove`.
-- [ ] Info inline via `inspect` → ordered `key: value` results pane.
-- [ ] Progress gauge + status line; `Esc` cancellation → non-error canceled
+- [x] Info inline via `inspect` → ordered `key: value` results pane.
+- [x] Progress gauge + status line; `Esc` cancellation → non-error canceled
       state + temp removal.
 
 **Phase 6 — Errors & exit codes**
 
-- [ ] Map `SymError`/`AppError` → messages + process exit via `common::exit_code`.
-- [ ] Light unit tests of non-UI glue (`-` rejection, validation, mapping).
+- [x] Map `SymError`/`AppError` → messages + process exit via `common::exit_code`.
+- [x] Light unit tests of non-UI glue (`-` rejection, validation, mapping).
 
 **Phase 7 — Docs & packaging**
 
-- [ ] `symcrypt-tui.1` man page.
-- [ ] README usage + key-binding reference.
-- [ ] `cargo install -p symcrypt-tui`.
+- [x] `symcrypt-tui.1` man page.
+- [x] README usage + key-binding reference.
+- [x] `cargo install -p symcrypt-tui`.
 
 ---
 

@@ -24,11 +24,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The Cargo workspace is scaffolded. The shared libraries — **`symcrypt-core`** (all
 crypto, file format, streaming, armor, pure helpers) and **`symcrypt-common`**
-(terminal glue) — and the **`symcrypt`** command-line front-end are implemented and
-tested. The remaining front-end binaries (`symcrypt-tui`, `symcrypt-gtk`) are still
-scaffold stubs that print a "not yet implemented" message and exit `2`; they are
-built out in `docs/IMPLEMENTATION_PLAN_03_TUI.md` and `_04_GTK.md`. Treat `docs/DESIGN.md` as
-the source of truth for how everything should behave.
+(terminal glue) — and the **`symcrypt`** command-line and **`symcrypt-tui`**
+terminal front-ends are implemented and tested. The remaining front-end binary
+(`symcrypt-gtk`) is still a scaffold stub that prints a "not yet implemented"
+message and exits `2`; it is built out in `docs/IMPLEMENTATION_PLAN_04_GTK.md`.
+Treat `docs/DESIGN.md` as the source of truth for how everything should behave.
 
 - **`docs/DESIGN.md`** — the authoritative specification: architecture, threat model,
   cryptographic design, the exact binary file format, CLI/TUI/GTK specs,
@@ -48,10 +48,10 @@ only the password/keyfile — no out-of-band parameters.
 ## Development commands
 
 This is a standard multi-crate Cargo workspace and it builds today: `symcrypt-core`,
-`symcrypt-common`, and the `symcrypt` CLI are implemented and tested, while the
-`symcrypt-tui` and `symcrypt-gtk` binaries are scaffold stubs that compile but exit
-`2` ("not yet implemented") until built out per `docs/IMPLEMENTATION_PLAN_03_TUI.md` and
-`_04_GTK.md`.
+`symcrypt-common`, the `symcrypt` CLI, and the `symcrypt-tui` terminal app are
+implemented and tested, while the `symcrypt-gtk` binary is a scaffold stub that
+compiles but exits `2` ("not yet implemented") until built out per
+`docs/IMPLEMENTATION_PLAN_04_GTK.md`.
 
 | Task                       | Command                                                                              |
 | -------------------------- | ------------------------------------------------------------------------------------ |

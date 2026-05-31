@@ -8,10 +8,10 @@ out-of-band parameters.
 
 > **Project status.** The shared libraries — `symcrypt-core` (all crypto, file
 > format, streaming, helpers) and `symcrypt-common` (terminal glue) — and the
-> `symcrypt` command-line front-end are implemented and tested. The
-> `symcrypt-tui` and `symcrypt-gtk` binaries remain scaffold stubs; they are
-> built out in `docs/IMPLEMENTATION_PLAN_03_TUI.md` and `_04_GTK.md`.
-> [`DESIGN.md`](docs/DESIGN.md) is the authoritative specification.
+> `symcrypt` command-line and `symcrypt-tui` terminal front-ends are implemented
+> and tested. The `symcrypt-gtk` binary remains a scaffold stub; it is built out
+> in `docs/IMPLEMENTATION_PLAN_04_GTK.md`. [`DESIGN.md`](docs/DESIGN.md) is the
+> authoritative specification.
 
 ## Highlights
 
@@ -37,7 +37,7 @@ the result.
 | `symcrypt-core`   | lib                | All crypto, KDF, file format/header, STREAM chunking, ASCII armor, and pure helpers.            |
 | `symcrypt-common` | lib                | Terminal glue shared by the CLI + TUI: path-or-stdin I/O, clobber check, secure remove, password resolution, exit-code mapping. |
 | `symcrypt-cli`    | bin `symcrypt`     | clap argument parsing; password resolution; calls the core.                                     |
-| `symcrypt-tui`    | bin `symcrypt-tui` | ratatui + crossterm interactive form. *(stub)*                                                  |
+| `symcrypt-tui`    | bin `symcrypt-tui` | ratatui + crossterm interactive form. Reuses `symcrypt-common`.                                 |
 | `symcrypt-gtk`    | bin `symcrypt-gtk` | relm4 (gtk4-rs) + libadwaita desktop app. *(stub)*                                              |
 
 The core never reads argv, never prompts, never touches the filesystem on its
@@ -69,8 +69,8 @@ so the commands above work just as well directly.
 
 The CLI lives in package **`symcrypt-cli`** but produces a binary named
 **`symcrypt`** — use `-p symcrypt-cli` (or `--bin symcrypt`) to run it. The
-`symcrypt-tui` and `symcrypt-gtk` binaries currently print a "not yet
-implemented" message and exit `2`.
+`symcrypt-gtk` binary currently prints a "not yet implemented" message and
+exits `2`.
 
 ## Command-line usage
 
@@ -110,6 +110,59 @@ Existing output files are refused unless `-f/--force` is given; on Unix the
 output is created with mode `0600`. Exit codes: `0` success, `1` I/O or general
 error, `2` usage error, `3` authentication failure, `4` unsupported or invalid
 format, `130` canceled.
+
+## Terminal usage
+
+`symcrypt-tui` is a full-screen, keyboard-driven terminal front-end over the same
+core as the CLI, so the file format, cryptography, and defaults are identical. It
+presents one form with four mode tabs — Encrypt, Decrypt, Info, and Verify — and
+runs each operation off the UI thread with a live progress gauge.
+
+Install the `symcrypt-tui` binary with Cargo, or install the binary **and** its
+man page under a prefix with the Makefile:
+
+```sh
+cargo install -p symcrypt-tui
+make install-tui                       # → /usr/local/bin/symcrypt-tui + man page
+make install-tui PREFIX="$HOME/.local"
+```
+
+Launch it (optionally prefilling the input-path field with a file):
+
+```sh
+symcrypt-tui                 # start with an empty form
+symcrypt-tui report.pdf      # prefill the input path
+```
+
+Switch modes with the `←`/`→` keys while the tabs are focused; each mode shows
+only the fields it needs (Encrypt adds a confirm field; Info reads no password).
+The output path is prefilled automatically — `input.symcrypt` (or `.symcrypt.asc`
+with armor) on encrypt, and the stored/derived name on decrypt — but a manual
+edit is never overwritten. An **Advanced** pane (collapsible) holds the
+Encrypt-only cipher and KDF selectors with the selected KDF's cost knobs, the
+`--name` and `--armor` switches, remove-input-after-success and overwrite (`-f`)
+switches, and a keyfile field for Encrypt/Decrypt/Verify. As in the CLI, an
+authentication failure is reported as "wrong password or corrupted/tampered
+file".
+
+### Key bindings
+
+| Key                 | Action                                                               |
+| ------------------- | -------------------------------------------------------------------- |
+| `Tab` / `Shift-Tab` | Move focus between fields                                             |
+| `←` / `→`           | Switch the mode tab (when tabs are focused) or change a selector      |
+| `Space`             | Toggle the focused checkbox / expander                               |
+| `Enter`             | Run the selected operation                                           |
+| `Esc`               | Cancel a running operation, or quit when idle                        |
+| `Ctrl-C`            | Quit (restores the terminal first; exits 130 if it interrupts a run) |
+| `?`                 | Toggle the help overlay                                              |
+
+### Differences from the CLI
+
+- **Filesystem paths only.** Every path field rejects a literal `-`; the TUI owns
+  stdin and stdout, so stdin/stdout streaming stays a CLI-only feature.
+- **No `--password-file` / `--password-env`.** The password is typed into the
+  masked field, captured inside the TUI's own event loop under raw mode.
 
 ## Library usage
 
