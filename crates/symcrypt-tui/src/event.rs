@@ -67,6 +67,10 @@ fn text_key(app: &mut App, target: Focus, code: KeyCode) {
     if edited && target == Focus::Output {
         app.output_dirty = true;
     }
+    // Editing the input path re-validates it and re-derives the prefilled output.
+    if edited && target == Focus::Input {
+        app.sync_paths();
+    }
     // Editing a KDF knob re-validates the options for inline feedback.
     if edited && target.is_knob() {
         app.validate_options();

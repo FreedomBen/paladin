@@ -297,16 +297,19 @@ impl App {
         r
     }
 
-    /// The currently focused widget (clamped to the ring).
+    /// The currently focused widget. Total: the ring always begins with
+    /// `[Mode, Input]`, but fall back to `Mode` rather than panicking if a
+    /// future change ever makes a ring empty.
     pub fn focus_target(&self) -> Focus {
-        let ring = self.ring();
-        ring[self.focus.min(ring.len() - 1)]
+        self.ring().get(self.focus).copied().unwrap_or(Focus::Mode)
     }
 
     /// Clamp `focus` into range after the ring shrinks.
     pub fn clamp_focus(&mut self) {
         let len = self.ring().len();
-        if self.focus >= len {
+        if len == 0 {
+            self.focus = 0;
+        } else if self.focus >= len {
             self.focus = len - 1;
         }
     }
@@ -332,20 +335,24 @@ impl App {
         self.sync_paths();
     }
 
-    /// Advance focus to the next widget (wrapping).
+    /// Advance focus to the next widget (wrapping). Pure focus movement does no
+    /// validation or prefill, so navigation never does blocking I/O and never
+    /// clears a live validation error.
     pub fn focus_next(&mut self) {
         let n = self.ring().len();
+        if n == 0 {
+            return;
+        }
         self.focus = (self.focus + 1) % n;
-        self.field_error = None;
-        self.sync_paths();
     }
 
     /// Move focus to the previous widget (wrapping).
     pub fn focus_prev(&mut self) {
         let n = self.ring().len();
+        if n == 0 {
+            return;
+        }
         self.focus = (self.focus + n - 1) % n;
-        self.field_error = None;
-        self.sync_paths();
     }
 
     /// Cycle the cipher selector.
@@ -686,9 +693,12 @@ impl App {
         }
     }
 
-    /// Validate the input path (surfacing an inline error) and, unless the user
-    /// has edited the output field, prefill it. Encrypt uses the pure default;
-    /// Decrypt inspects the header for any stored name.
+    /// Validate the input path (surfacing an inline error), prefill the output
+    /// (unless the user pinned it with a manual edit), and re-validate the
+    /// encrypt options. Called on input edits, mode switches, and the armor
+    /// toggle — not on every focus move, so navigation does no blocking I/O.
+    /// Encrypt prefills from the pure default; Decrypt inspects the header for a
+    /// stored name and hints when the input is not a symcrypt file.
     pub fn sync_paths(&mut self) {
         self.field_error = None;
         if self.input.is_empty() {
@@ -702,24 +712,31 @@ impl App {
                 return;
             }
         };
-        if self.output_dirty || !self.mode.has_output() {
-            return;
-        }
-        match self.mode {
-            Mode::Encrypt => {
-                let out = core::default_encrypt_output(&path, self.armor);
-                self.output.set_text(out.to_string_lossy().into_owned());
-            }
-            Mode::Decrypt => {
-                if let Ok(mut reader) = common::open_input(&path) {
-                    if let Ok(header) = core::inspect(&mut reader) {
-                        let out = core::default_decrypt_output(&path, &header);
-                        self.output.set_text(out.to_string_lossy().into_owned());
-                    }
+        if self.mode.has_output() && !self.output_dirty {
+            match self.mode {
+                Mode::Encrypt => {
+                    let out = core::default_encrypt_output(&path, self.armor);
+                    self.output.set_text(out.to_string_lossy().into_owned());
                 }
+                Mode::Decrypt => match common::open_input(&path) {
+                    Ok(mut reader) => match core::inspect(&mut reader) {
+                        Ok(header) => {
+                            let out = core::default_decrypt_output(&path, &header);
+                            self.output.set_text(out.to_string_lossy().into_owned());
+                        }
+                        Err(_) => {
+                            self.field_error =
+                                Some("not a symcrypt file; enter the output path".to_string());
+                        }
+                    },
+                    Err(e) => self.field_error = Some(e.to_string()),
+                },
+                _ => {}
             }
-            _ => {}
         }
+        // Keep a bad knob/--name error visible across navigation (encrypt only;
+        // a no-op otherwise, so it never clobbers the Decrypt hint above).
+        self.validate_options();
     }
 }
 
@@ -1073,5 +1090,92 @@ mod tests {
             app.status
         );
         assert_eq!(app.last_exit, 4); // EXIT_FORMAT (bad magic)
+    }
+
+    #[test]
+    fn worker_cancellation_removes_partial_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("big.bin");
+        std::fs::write(&input, vec![0u8; 256 * 1024]).unwrap(); // multiple chunks
+        let enc = dir.path().join("big.enc");
+
+        let mut app = App::new(Some(path_str(&input)));
+        // Keep the default Argon2id KDF: its key derivation guarantees a window
+        // in which the cancel flag is observed before the operation can finish.
+        app.output.set_text(path_str(&enc));
+        app.output_dirty = true;
+        app.password.set_text("pw");
+        app.confirm.set_text("pw");
+        app.start_run();
+        app.request_cancel(); // before the worker can complete
+        pump_until_idle(&mut app);
+        assert_eq!(
+            app.status,
+            RunStatus::Canceled,
+            "status was {:?}",
+            app.status
+        );
+        assert!(!enc.exists(), "partial output must be removed on cancel");
+        assert_eq!(app.last_exit, 0); // cancel is a non-error
+    }
+
+    #[test]
+    fn worker_keyfile_only_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("k.key");
+        std::fs::write(&key, b"super secret key material").unwrap();
+        let input = dir.path().join("p.txt");
+        std::fs::write(&input, b"payload").unwrap();
+        let enc = dir.path().join("p.enc");
+
+        let mut app = App::new(Some(path_str(&input)));
+        app.kdf = KdfId::Pbkdf2;
+        app.pbkdf2_iterations.set_text("10000");
+        app.keyfile_only = true;
+        app.keyfile.set_text(path_str(&key));
+        app.output.set_text(path_str(&enc));
+        app.output_dirty = true;
+        app.start_run();
+        pump_until_idle(&mut app);
+        assert!(matches!(app.status, RunStatus::Done(_)), "{:?}", app.status);
+
+        let dec = dir.path().join("p.dec");
+        let mut app2 = App::new(Some(path_str(&enc)));
+        app2.next_mode(); // -> Decrypt
+        app2.keyfile_only = true;
+        app2.keyfile.set_text(path_str(&key));
+        app2.output.set_text(path_str(&dec));
+        app2.output_dirty = true;
+        app2.start_run();
+        pump_until_idle(&mut app2);
+        assert!(
+            matches!(app2.status, RunStatus::Done(_)),
+            "{:?}",
+            app2.status
+        );
+        assert_eq!(std::fs::read(&dec).unwrap(), b"payload");
+    }
+
+    #[test]
+    fn focus_ring_traversal_never_panics() {
+        let mut app = App::new(None);
+        for mode in Mode::ALL {
+            app.mode = mode;
+            app.advanced = true;
+            // Walk the whole ring forward and back past its ends.
+            for _ in 0..app.ring().len() + 2 {
+                let _ = app.focus_target();
+                app.focus_next();
+            }
+            for _ in 0..app.ring().len() + 2 {
+                let _ = app.focus_target();
+                app.focus_prev();
+            }
+            // Each KDF exposes a different knob set; cycling must stay valid.
+            for _ in 0..KDFS.len() {
+                app.cycle_kdf(true);
+                let _ = app.focus_target();
+            }
+        }
     }
 }

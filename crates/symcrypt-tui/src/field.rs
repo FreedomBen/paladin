@@ -2,16 +2,24 @@
 //! optional masking for password fields. Pure and unit-tested; the UI renders
 //! [`Editor::display`] and positions the cursor with [`Editor::cursor`].
 
+use zeroize::Zeroize;
+
 /// Character used to mask a hidden password field.
 const MASK_CHAR: char = '\u{2022}'; // BULLET '•'
 
 /// One line of editable text. The cursor is a *character* index in `0..=len`.
+///
+/// Editors created with [`Editor::masked`] are *sensitive*: their backing
+/// buffer is zeroized on clear, on replacement, and on drop, so a typed
+/// password does not linger in freed heap (DESIGN §7.2).
 #[derive(Clone, Debug, Default)]
 pub struct Editor {
     text: String,
     /// Character index of the caret (not a byte offset).
     cursor: usize,
     masked: bool,
+    /// Zeroize the buffer on clear/replace/drop (set for password fields).
+    sensitive: bool,
 }
 
 impl Editor {
@@ -20,11 +28,15 @@ impl Editor {
         Self::default()
     }
 
-    /// Empty editor that renders masked (for passwords).
+    /// Empty editor that renders masked (for passwords). The buffer is marked
+    /// sensitive (zeroized on clear/replace/drop) and pre-reserves capacity so a
+    /// typical password does not reallocate and scatter copies across the heap.
     pub fn masked() -> Self {
         Self {
+            text: String::with_capacity(256),
+            cursor: 0,
             masked: true,
-            ..Self::default()
+            sensitive: true,
         }
     }
 
@@ -36,6 +48,7 @@ impl Editor {
             text,
             cursor,
             masked: false,
+            sensitive: false,
         }
     }
 
@@ -61,12 +74,18 @@ impl Editor {
 
     /// Replace the contents and move the caret to the end.
     pub fn set_text(&mut self, text: impl Into<String>) {
+        if self.sensitive {
+            self.text.zeroize();
+        }
         self.text = text.into();
         self.cursor = self.len();
     }
 
     /// Clear the contents and caret.
     pub fn clear(&mut self) {
+        if self.sensitive {
+            self.text.zeroize();
+        }
         self.text.clear();
         self.cursor = 0;
     }
@@ -139,6 +158,14 @@ impl Editor {
             MASK_CHAR.to_string().repeat(self.len())
         } else {
             self.text.clone()
+        }
+    }
+}
+
+impl Drop for Editor {
+    fn drop(&mut self) {
+        if self.sensitive {
+            self.text.zeroize();
         }
     }
 }

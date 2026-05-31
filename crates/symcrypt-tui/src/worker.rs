@@ -107,7 +107,9 @@ fn execute(job: Job, cancel: &AtomicBool, tx: &Sender<Msg>) -> Result<(), AppErr
 
     match op {
         Op::Encrypt(opts) => {
-            let mut sink = sink.expect("encrypt requires an output sink");
+            let Some(mut sink) = sink else {
+                return Err(AppError::usage("internal error: missing output sink"));
+            };
             core::encrypt(
                 &mut reader,
                 sink.as_write(),
@@ -119,7 +121,9 @@ fn execute(job: Job, cancel: &AtomicBool, tx: &Sender<Msg>) -> Result<(), AppErr
             sink.commit()?;
         }
         Op::Decrypt => {
-            let mut sink = sink.expect("decrypt requires an output sink");
+            let Some(mut sink) = sink else {
+                return Err(AppError::usage("internal error: missing output sink"));
+            };
             core::decrypt(
                 &mut reader,
                 sink.as_write(),
