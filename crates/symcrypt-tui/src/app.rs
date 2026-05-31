@@ -636,19 +636,26 @@ impl App {
             if let Some(run) = self.run.take() {
                 run.join();
             }
-            match result {
-                Ok(()) => {
-                    self.status = RunStatus::Done(self.success_message());
-                    self.last_exit = 0;
-                }
-                Err(e) if is_canceled(&e) => {
-                    self.status = RunStatus::Canceled;
-                    self.last_exit = 0;
-                }
-                Err(e) => {
-                    self.last_exit = e.exit_code();
-                    self.status = RunStatus::Failed(e.to_string());
-                }
+            self.finish(result);
+        }
+    }
+
+    /// Apply a completed operation's result to the status and exit code. The
+    /// exit code is mapped through `symcrypt-common`. A cancellation is a
+    /// non-error: it leaves `last_exit` at the last completed operation's code
+    /// rather than overwriting it (DESIGN §6.6 / plan §4.6).
+    fn finish(&mut self, result: Result<(), common::AppError>) {
+        match result {
+            Ok(()) => {
+                self.status = RunStatus::Done(self.success_message());
+                self.last_exit = 0;
+            }
+            Err(e) if is_canceled(&e) => {
+                self.status = RunStatus::Canceled;
+            }
+            Err(e) => {
+                self.last_exit = e.exit_code();
+                self.status = RunStatus::Failed(e.to_string());
             }
         }
     }
@@ -1032,5 +1039,39 @@ mod tests {
         assert!(!app.is_running());
         assert_eq!(app.info_lines.len(), 12);
         assert!(matches!(app.status, RunStatus::Done(_)));
+    }
+
+    #[test]
+    fn cancel_is_non_error_and_preserves_last_exit() {
+        let mut app = App::new(None);
+        app.last_exit = 3; // a prior op had failed
+        app.finish(Err(common::AppError::Core(core::SymError::Canceled)));
+        assert_eq!(app.status, RunStatus::Canceled);
+        assert_eq!(app.last_exit, 3); // cancel does not change the exit code
+    }
+
+    #[test]
+    fn failure_maps_to_common_exit_code() {
+        let mut app = App::new(None);
+        app.finish(Err(common::AppError::Core(core::SymError::Auth)));
+        assert!(matches!(app.status, RunStatus::Failed(_)));
+        assert_eq!(app.last_exit, 3);
+    }
+
+    #[test]
+    fn info_on_non_symcrypt_file_maps_to_format_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let junk = dir.path().join("junk.bin");
+        std::fs::write(&junk, b"not a symcrypt file at all").unwrap();
+
+        let mut app = App::new(Some(path_str(&junk)));
+        app.mode = Mode::Info;
+        app.start_run();
+        assert!(
+            matches!(app.status, RunStatus::Failed(_)),
+            "{:?}",
+            app.status
+        );
+        assert_eq!(app.last_exit, 4); // EXIT_FORMAT (bad magic)
     }
 }
