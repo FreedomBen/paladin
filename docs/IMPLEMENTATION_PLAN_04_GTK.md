@@ -226,22 +226,22 @@ and test it; verify the UI by hand.**
 
 ## Checklist
 
-- [ ] Add GTK deps (relm4, relm4-components, libadwaita, gtk4, anyhow, tempfile, zeroize); note `zeroize` in DESIGN §9.
-- [ ] Scaffold `adw::Application` + empty window; `cargo run -p symcrypt-gtk` opens it.
-- [ ] `mode.rs`: `Mode` enum + per-mode field visibility (+ unit tests).
-- [ ] `message.rs`: `SymError` → user-facing text, incl. `Auth` single condition (+ tests).
-- [ ] `info.rs`: `Header` → display rows matching CLI `--info` fields/order (+ tests).
-- [ ] `options.rs`: build `EncryptOptions`/secret material, confirm-match, `--name` basename (+ tests).
-- [ ] `fsio.rs`: regular-file/same-file checks, `0600` temp finalization, best-effort remove, keyfile caps (+ temp-dir tests).
-- [ ] relm4 component skeleton: `AppModel`/`AppInput`/`CommandOutput`, `view!`, `ViewStack` modes + visibility.
-- [ ] Input/output rows + `gtk::FileDialog` browse + `gtk::DropTarget` drag-and-drop + output prefill (respecting manual edits).
-- [ ] Password/confirm rows, keyfile-only toggle, keyfile chooser, Advanced `ExpanderRow` (cipher/KDF/knobs/name/armor/remove/overwrite).
-- [ ] `task.rs` worker: off-thread crypto, throttled progress, temp commit/rollback, remove-input warn-but-success.
-- [ ] Cancellation via shared `AtomicBool`; non-error canceled state; temp cleanup.
-- [ ] Overwrite approval wired to finalization (GTK `-f` equivalent).
-- [ ] Info mode (inspect, no password) and Verify mode (worker, pass/fail toast).
-- [ ] Polish: focus order, disable Run while running, app id, icon, styling.
-- [ ] Automated tests green (`cargo test -p symcrypt-gtk`); `cargo fmt` + `cargo clippy` clean.
-- [ ] Manual UI verification checklist completed.
-- [ ] Docs: `.desktop` file, GTK build/run notes, README/CLAUDE updates.
-- [ ] Packaging: `cargo install`/build notes for `symcrypt-gtk`.
+- [x] Add GTK deps (relm4, relm4-components, libadwaita, gtk4, anyhow, tempfile, zeroize); note `zeroize` in DESIGN §9.
+- [x] Scaffold `adw::Application` + empty window; `cargo run -p symcrypt-gtk` opens it.
+- [x] `mode.rs`: `Mode` enum + per-mode field visibility (+ unit tests).
+- [x] `message.rs`: `SymError` → user-facing text, incl. `Auth` single condition (+ tests).
+- [x] `info.rs`: `Header` → display rows matching CLI `--info` fields/order (+ tests).
+- [x] `options.rs`: build `EncryptOptions`/secret material, confirm-match, `--name` basename (+ tests).
+- [x] `fsio.rs`: regular-file/same-file checks, `0600` temp finalization, best-effort remove, keyfile caps (+ temp-dir tests).
+- [x] relm4 component skeleton: `AppModel`/`AppInput`/`CommandOutput`, `view!`, `ViewStack` modes + visibility.
+- [x] Input/output rows + `gtk::FileDialog` browse + `gtk::DropTarget` drag-and-drop + output prefill (respecting manual edits).
+- [x] Password/confirm rows, keyfile-only toggle, keyfile chooser, Advanced `ExpanderRow` (cipher/KDF/knobs/name/armor/remove/overwrite).
+- [x] `task.rs` worker: off-thread crypto, throttled progress, temp commit/rollback, remove-input warn-but-success.
+- [x] Cancellation via shared `AtomicBool`; non-error canceled state; temp cleanup.
+- [x] Overwrite approval wired to finalization (GTK `-f` equivalent).
+- [x] Info mode (inspect, no password) and Verify mode (worker, pass/fail toast).
+- [x] Polish: focus order, disable Run while running, app id, icon, styling.
+- [x] Automated tests green (`cargo test -p symcrypt-gtk`); `cargo fmt` + `cargo clippy` clean.
+- [ ] Manual UI verification checklist completed. (Pending manual verification on a graphical session — this environment is headless.)
+- [x] Docs: `.desktop` file, GTK build/run notes, README/CLAUDE updates.
+- [x] Packaging: `cargo install`/build notes for `symcrypt-gtk`.

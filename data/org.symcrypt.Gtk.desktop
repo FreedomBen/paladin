@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=symcrypt
+GenericName=File Encryption
+Comment=Encrypt and decrypt files with a password or keyfile
+Exec=symcrypt-gtk %f
+Icon=org.symcrypt.Gtk
+Terminal=false
+Categories=Utility;Security;
+Keywords=encrypt;decrypt;encryption;crypto;password;security;AES;ChaCha20;
+StartupNotify=true

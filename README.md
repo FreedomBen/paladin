@@ -6,12 +6,13 @@ shared core. The default cipher is **AES-256-GCM** and the default KDF is
 so they can be identified and decrypted with only the password (or keyfile) — no
 out-of-band parameters.
 
-> **Project status.** The shared libraries — `symcrypt-core` (all crypto, file
-> format, streaming, helpers) and `symcrypt-common` (terminal glue) — and the
-> `symcrypt` command-line and `symcrypt-tui` terminal front-ends are implemented
-> and tested. The `symcrypt-gtk` binary remains a scaffold stub; it is built out
-> in `docs/IMPLEMENTATION_PLAN_04_GTK.md`. [`DESIGN.md`](docs/DESIGN.md) is the
-> authoritative specification.
+> **Project status.** All three front-ends are implemented. The shared
+> libraries — `symcrypt-core` (all crypto, file format, streaming, helpers) and
+> `symcrypt-common` (terminal glue) — and the `symcrypt` command-line and
+> `symcrypt-tui` terminal front-ends are implemented and tested. The
+> `symcrypt-gtk` desktop app is implemented; it builds clean and its logic is
+> unit-tested, but manual UI verification on a graphical session is still
+> pending. [`DESIGN.md`](docs/DESIGN.md) is the authoritative specification.
 
 ## Highlights
 
@@ -38,7 +39,7 @@ the result.
 | `symcrypt-common` | lib                | Terminal glue shared by the CLI + TUI: path-or-stdin I/O, clobber check, secure remove, password resolution, exit-code mapping. |
 | `symcrypt-cli`    | bin `symcrypt`     | clap argument parsing; password resolution; calls the core.                                     |
 | `symcrypt-tui`    | bin `symcrypt-tui` | ratatui + crossterm interactive form. Reuses `symcrypt-common`.                                 |
-| `symcrypt-gtk`    | bin `symcrypt-gtk` | relm4 (gtk4-rs) + libadwaita desktop app. *(stub)*                                              |
+| `symcrypt-gtk`    | bin `symcrypt-gtk` | relm4 (gtk4-rs) + libadwaita desktop app.                                                       |
 
 The core never reads argv, never prompts, never touches the filesystem on its
 own, never decides whether to overwrite, and never exits the process. It takes
@@ -47,8 +48,9 @@ generic `Read`/`Write` and reports progress through a callback.
 ## Requirements
 
 - **Rust 1.94+** (Cargo workspace).
-- The GTK app additionally needs **GTK4 + libadwaita** development libraries
-  (only relevant once `symcrypt-gtk` is implemented).
+- Building the GTK app additionally needs the **GTK4 + libadwaita** development
+  libraries — Fedora: `gtk4-devel libadwaita-devel`; Debian/Ubuntu:
+  `libgtk-4-dev libadwaita-1-dev`.
 
 ## Build and test
 
@@ -68,9 +70,7 @@ test). Run `make help` to list every target. It is a thin wrapper over Cargo,
 so the commands above work just as well directly.
 
 The CLI lives in package **`symcrypt-cli`** but produces a binary named
-**`symcrypt`** — use `-p symcrypt-cli` (or `--bin symcrypt`) to run it. The
-`symcrypt-gtk` binary currently prints a "not yet implemented" message and
-exits `2`.
+**`symcrypt`** — use `-p symcrypt-cli` (or `--bin symcrypt`) to run it.
 
 ## Command-line usage
 
@@ -163,6 +163,58 @@ file".
   stdin and stdout, so stdin/stdout streaming stays a CLI-only feature.
 - **No `--password-file` / `--password-env`.** The password is typed into the
   masked field, captured inside the TUI's own event loop under raw mode.
+
+## Desktop (GTK) usage
+
+`symcrypt-gtk` is a libadwaita desktop front-end (relm4 + gtk4-rs) over the same
+core as the CLI and TUI, so the file format, cryptography, and defaults are
+identical. It is implemented; it builds clean and its pure logic is unit-tested,
+but manual UI verification on a graphical session is still pending.
+
+Building it requires the **GTK4 + libadwaita** development libraries — Fedora:
+`gtk4-devel libadwaita-devel`; Debian/Ubuntu: `libgtk-4-dev libadwaita-1-dev`.
+
+The window presents a `ViewSwitcher` over four modes — Encrypt, Decrypt, Info,
+and Verify — sharing one form whose rows show and hide per mode. It offers:
+
+- input and output file pickers via `gtk::FileDialog`, plus drag-and-drop of an
+  input file onto the window;
+- output prefill — `input.symcrypt` (or `.symcrypt.asc` with armor) on encrypt,
+  and the stored/derived name on decrypt — that never clobbers a manual edit;
+- password and confirm (Encrypt) entries, a keyfile-only toggle, and a keyfile
+  chooser;
+- an **Advanced** expander holding the Encrypt-only cipher and KDF selectors,
+  the selected KDF's cost knobs, and the `--name`, armor, remove-input, and
+  overwrite switches;
+- crypto on a background worker with a live progress gauge and a Cancel button,
+  an overwrite-confirm dialog, and an Info mode that inspects the header inline
+  with no password.
+
+As in the CLI and TUI, an authentication failure is reported as the single
+condition "wrong password or corrupted/tampered file".
+
+Run it from the workspace, or install the binary together with its `.desktop`
+entry, icon, and AppStream metainfo:
+
+```sh
+cargo run -p symcrypt-gtk                 # run from the source tree
+make run-gtk                              # same, via the Makefile
+
+cargo install -p symcrypt-gtk             # binary only
+make install-gtk                          # binary + .desktop + icon + metainfo
+make install-gtk PREFIX="$HOME/.local"
+make uninstall-gtk                        # remove them again
+```
+
+### Differences from the CLI
+
+- **Filesystem paths only.** The path fields are file-chooser backed and do not
+  accept a literal `-`, so stdin/stdout streaming stays a CLI-only feature.
+- **No `--password-file` / `--password-env`.** The password is typed into the
+  masked entry; those non-interactive sources remain CLI-only.
+
+Flatpak packaging (sandboxed, with the `.desktop`/icon/metainfo already
+provided) is a possible future distribution path.
 
 ## Library usage
 

@@ -24,10 +24,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The Cargo workspace is scaffolded. The shared libraries — **`symcrypt-core`** (all
 crypto, file format, streaming, armor, pure helpers) and **`symcrypt-common`**
-(terminal glue) — and the **`symcrypt`** command-line and **`symcrypt-tui`**
-terminal front-ends are implemented and tested. The remaining front-end binary
-(`symcrypt-gtk`) is still a scaffold stub that prints a "not yet implemented"
-message and exits `2`; it is built out in `docs/IMPLEMENTATION_PLAN_04_GTK.md`.
+(terminal glue) — and all three front-ends are implemented: the **`symcrypt`**
+command-line and **`symcrypt-tui`** terminal front-ends are implemented and
+tested, and the **`symcrypt-gtk`** desktop app is implemented too — it builds
+clean and its logic is unit-tested, though manual UI verification on a graphical
+session is still pending (see `docs/IMPLEMENTATION_PLAN_04_GTK.md`).
 Treat `docs/DESIGN.md` as the source of truth for how everything should behave.
 
 - **`docs/DESIGN.md`** — the authoritative specification: architecture, threat model,
@@ -49,9 +50,9 @@ only the password/keyfile — no out-of-band parameters.
 
 This is a standard multi-crate Cargo workspace and it builds today: `symcrypt-core`,
 `symcrypt-common`, the `symcrypt` CLI, and the `symcrypt-tui` terminal app are
-implemented and tested, while the `symcrypt-gtk` binary is a scaffold stub that
-compiles but exits `2` ("not yet implemented") until built out per
-`docs/IMPLEMENTATION_PLAN_04_GTK.md`.
+implemented and tested, and the `symcrypt-gtk` desktop app is implemented as well
+— it builds clean and its logic is unit-tested, though manual UI verification on a
+graphical session is still pending (see `docs/IMPLEMENTATION_PLAN_04_GTK.md`).
 
 | Task                       | Command                                                                              |
 | -------------------------- | ------------------------------------------------------------------------------------ |

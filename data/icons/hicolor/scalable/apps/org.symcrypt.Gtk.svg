@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- Simple padlock placeholder icon for symcrypt -->
+  <rect x="14" y="28" width="36" height="28" rx="5" ry="5" fill="#3584e4"/>
+  <path d="M22 28 v-6 a10 10 0 0 1 20 0 v6" fill="none" stroke="#1a5fb4" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="32" cy="40" r="4" fill="#ffffff"/>
+  <rect x="30" y="42" width="4" height="9" rx="2" ry="2" fill="#ffffff"/>
+</svg>
