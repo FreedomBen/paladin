@@ -14,6 +14,7 @@ pub mod info;
 pub mod message;
 pub mod mode;
 pub mod options;
+pub mod task;
 
 use adw::prelude::*;
 use gtk::glib;
