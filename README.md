@@ -62,6 +62,11 @@ generic `Read`/`Write` and reports progress through a callback.
 | Lint                      | `cargo clippy --all-targets --all-features`        |
 | Format                    | `cargo fmt` (check only: `cargo fmt --check`)      |
 
+A `Makefile` wraps these for convenience: `make build`, `make release`,
+`make test`, `make lint`, `make fmt`, and `make ci` (format-check + lint +
+test). Run `make help` to list every target. It is a thin wrapper over Cargo,
+so the commands above work just as well directly.
+
 The CLI lives in package **`symcrypt-cli`** but produces a binary named
 **`symcrypt`** — use `-p symcrypt-cli` (or `--bin symcrypt`) to run it. The
 `symcrypt-tui` and `symcrypt-gtk` binaries currently print a "not yet
@@ -73,6 +78,15 @@ Install the `symcrypt` binary with Cargo:
 
 ```sh
 cargo install --path crates/symcrypt-cli
+```
+
+Or install the binary **and** its man page under a prefix (default
+`/usr/local`, override with `PREFIX=`, stage with `DESTDIR=`):
+
+```sh
+make install                      # → /usr/local/bin/symcrypt + man page
+make install PREFIX="$HOME/.local"
+make uninstall                    # remove both again
 ```
 
 `symcrypt` takes exactly one mode (`-e`/`-d`/`-i`/`--verify`) and one `<FILE>`
