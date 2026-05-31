@@ -9,6 +9,7 @@
 //! library plus a thin binary so those helpers form a public surface (and so are
 //! not spuriously flagged as dead code while the UI is wired up incrementally).
 
+pub mod app;
 pub mod fsio;
 pub mod info;
 pub mod message;
@@ -16,28 +17,16 @@ pub mod mode;
 pub mod options;
 pub mod task;
 
-use adw::prelude::*;
 use gtk::glib;
+use relm4::RelmApp;
 
 /// Application id used for the GApplication and (eventually) the desktop file.
 pub const APP_ID: &str = "org.symcrypt.Gtk";
 
-/// Bootstrap libadwaita and run the application, returning its exit code.
-///
-/// Step 1 (scaffold) opens an empty window; later steps replace this with the
-/// relm4 `AppModel` component (see the implementation plan).
+/// Bootstrap libadwaita and run the relm4 [`app::AppModel`] component,
+/// returning its exit code.
 pub fn run() -> glib::ExitCode {
-    let app = adw::Application::builder().application_id(APP_ID).build();
-    app.connect_activate(build_window);
-    app.run()
-}
-
-fn build_window(app: &adw::Application) {
-    let window = adw::ApplicationWindow::builder()
-        .application(app)
-        .title("symcrypt")
-        .default_width(480)
-        .default_height(360)
-        .build();
-    window.present();
+    let app = RelmApp::new(APP_ID);
+    app.run::<app::AppModel>(());
+    glib::ExitCode::SUCCESS
 }
