@@ -870,7 +870,7 @@ the worker in a zeroizing buffer.
 | `scrypt`                       | core               | scrypt KDF                               |
 | `pbkdf2` + `sha2`              | core               | PBKDF2-HMAC-SHA256 KDF                   |
 | `rand` / `getrandom`           | core               | CSPRNG for salt + nonce prefix           |
-| `zeroize`                      | core, cli          | Wipe key material from memory            |
+| `zeroize`                      | core, cli, gtk     | Wipe key material from memory            |
 | `base64`                       | core               | ASCII armor                              |
 | `thiserror`                    | core, common       | Typed errors (`SymError`)                |
 | `tempfile`                     | common, gtk, tests | Sibling temp files and test directories  |

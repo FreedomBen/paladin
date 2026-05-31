@@ -1,7 +1,7 @@
-//! `symcrypt-gtk` relm4/libadwaita desktop front-end. Implemented in
-//! `docs/IMPLEMENTATION_PLAN_04_GTK.md`; this is a scaffold stub.
+//! `symcrypt-gtk` binary entry point. All logic lives in the library crate
+//! (`symcrypt_gtk`); this is a thin launcher. See
+//! `docs/IMPLEMENTATION_PLAN_04_GTK.md`.
 
-fn main() {
-    eprintln!("symcrypt-gtk: GTK app not yet implemented (see docs/IMPLEMENTATION_PLAN_04_GTK.md)");
-    std::process::exit(2);
+fn main() -> gtk::glib::ExitCode {
+    symcrypt_gtk::run()
 }

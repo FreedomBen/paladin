@@ -11,3 +11,11 @@ description = "GTK4/libadwaita desktop front-end for symcrypt"
 workspace = true
 
 [dependencies]
+adw = { version = "0.9", package = "libadwaita", features = ["v1_4"] }
+anyhow = "1.0.102"
+gtk = { version = "0.11", package = "gtk4" }
+relm4 = { version = "0.11.0", features = ["libadwaita"] }
+relm4-components = "0.11.0"
+symcrypt-core = { version = "0.1.0", path = "../symcrypt-core" }
+tempfile = "3.27.0"
+zeroize = "1.8.2"
