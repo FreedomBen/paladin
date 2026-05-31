@@ -1,4 +1,3 @@
-#![allow(dead_code)] // wired into run.rs in a later step
 //! Build `EncryptOptions` from parsed args (DESIGN §6.3, §12). Plan §5 step 4.
 
 use crate::cli::Cli;

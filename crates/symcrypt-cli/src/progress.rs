@@ -1,4 +1,3 @@
-#![allow(dead_code)] // wired into run.rs in the next step
 //! Progress bar + SIGINT cancellation (DESIGN §6.5–§6.6).
 //!
 //! Crypto runs on the main thread here; the progress bar renders on stderr and

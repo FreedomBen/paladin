@@ -1,4 +1,3 @@
-#![allow(dead_code)] // wired into run.rs in the next step
 //! Password resolution + interactive prompt → `Secret` (DESIGN §6.4).
 //!
 //! Non-interactive sources (`-p`, `--password-file`, `--password-env`,
