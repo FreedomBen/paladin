@@ -14,7 +14,9 @@ use clap::Parser;
 
 fn main() {
     let cli = cli::Cli::parse();
-    if let Err(e) = run::dispatch(&cli) {
+    let cancel = progress::cancel_flag();
+    progress::install_sigint(&cancel);
+    if let Err(e) = run::dispatch(&cli, cancel) {
         eprintln!("symcrypt: {e}");
         std::process::exit(e.exit_code());
     }

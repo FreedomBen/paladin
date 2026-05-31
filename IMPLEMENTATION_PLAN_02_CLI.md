@@ -406,10 +406,10 @@ After code changes: `cargo fmt`, `cargo clippy --all-targets --all-features`
 - [x] **Step 3** — `validate.rs` semantic rules (mode/flag, knob↔kdf, `--name`/`--remove`+stdin, q/v/progress).
 - [x] **Step 4** — `options.rs` cipher/KDF parse + `KdfParams` assembly + `--name` basename + armor.
 - [x] **Step 5** — `secret.rs` non-interactive resolution + interactive prompt/confirm → `Secret`.
-- [ ] **Step 6** — `run.rs` input/output paths, decrypt-needs-`inspect` sequencing, `OutputSink` finalize, `--remove`.
+- [x] **Step 6** — `run.rs` input/output paths, decrypt-needs-`inspect` sequencing, `OutputSink` finalize, `--remove`.
 - [x] **Step 7** — `progress.rs` indicatif bar + `ctrlc` cancel flag + `OnProgress` closure.
-- [ ] **Step 8** — encrypt / decrypt / verify handlers wired to core.
-- [ ] **Step 9** — `info.rs` exact stable `--info` output.
+- [x] **Step 8** — encrypt / decrypt / verify handlers wired to core.
+- [x] **Step 9** — `info.rs` exact stable `--info` output.
 - [ ] **Step 10** — `assert_cmd` integration suite (§8); `fmt` + `clippy` clean.
 - [ ] **Step 11** — `--help` text, `symcrypt(1)` man page, `cargo install`, README CLI section.
 - [ ] DESIGN §9 updated: add `ctrlc` (cli); add `cli` to `zeroize`; drop `cli` from `anyhow`.
