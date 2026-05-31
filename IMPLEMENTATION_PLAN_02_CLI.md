@@ -401,8 +401,8 @@ After code changes: `cargo fmt`, `cargo clippy --all-targets --all-features`
 
 ## 11. Master checklist
 
-- [ ] **Step 1** — deps added; module skeleton; `main` error→exit mapping; `--help`/`--version`.
-- [ ] **Step 2** — `cli.rs` arg model; mode group + positional `<FILE>`.
+- [x] **Step 1** — deps added; module skeleton; `main` error→exit mapping; `--help`/`--version`.
+- [x] **Step 2** — `cli.rs` arg model; mode group + positional `<FILE>`.
 - [ ] **Step 3** — `validate.rs` semantic rules (mode/flag, knob↔kdf, `--name`/`--remove`+stdin, q/v/progress).
 - [ ] **Step 4** — `options.rs` cipher/KDF parse + `KdfParams` assembly + `--name` basename + armor.
 - [ ] **Step 5** — `secret.rs` non-interactive resolution + interactive prompt/confirm → `Secret`.
