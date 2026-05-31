@@ -17,7 +17,11 @@ plan, then the code.
 > output-path helpers`, `Implement symcrypt-common terminal glue`), the
 > workspace, `symcrypt-core`, and `symcrypt-common` are already built. The
 > checklists below are ticked to reflect that committed state — they now serve as
-> an as-built spec and a re-verification checklist. Re-run `cargo test` +
+> an as-built spec and a re-verification checklist. The API sketches in each
+> phase have been reconciled to the shipped names and signatures; where the
+> as-built diverged from the original sketch (method vs. free function,
+> `to_words`/`from_words`, `auto_dearmor`, the `symcrypt-common` module split,
+> etc.) an **As built** note flags it. Re-run `cargo test` +
 > `cargo clippy --all-targets --all-features` to confirm green.
 
 ---
@@ -85,7 +89,10 @@ dependencies arrive in plans `02`–`04`. Do **not** add front-end deps
   comes straight from `getrandom::fill`, so the `rand`/`rand_core` wrappers are
   not added as direct deps — `rand` is absent from the tree, `rand_core` is only
   pulled transitively by the KDF crates.)
-- `symcrypt-common` deps: path `symcrypt-core`, `thiserror`; dev-dep `tempfile`.
+- `symcrypt-common` deps: path `symcrypt-core`, `thiserror`, `tempfile`, and
+  `zeroize`. **As built:** `tempfile` is a normal dependency (the `open_output`
+  sibling temp file), not a dev-dep, and `zeroize` is added so the password and
+  keyfile readers can return `Zeroizing<Vec<u8>>`.
 - Confirm `cargo build` + `cargo test` succeed on the empty workspace.
 
 **Checklist**
@@ -108,13 +115,14 @@ later phases use it. Variants align 1:1 with the §6.6 exit-code mapping.
 
 ```rust
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]               // future variants must not break front-end matches
 pub enum SymError {
     Auth,                       // wrong password OR corrupt/tampered (indistinguishable) → 3
     BadMagic,                   // not a symcrypt file                                    → 4
     UnsupportedVersion(u8),     //                                                        → 4
     UnknownCipher(u8),          //                                                        → 4
     UnknownKdf(u8),             //                                                        → 4
-    ReservedFlags,              // reserved flag bit set                                  → 4
+    ReservedFlags(u8),          // reserved flag bit set (carries the offending flags)    → 4
     MalformedHeader(&'static str), // structural: bad lengths/costs, non-UTF-8 name, armor → 4
     InvalidOptions(&'static str),  // empty Secret, bad keyfile size, KDF mismatch, etc.   → 2
     InputTooLarge,              // > 64 GiB plaintext or > 2^32 chunks                     → 1
@@ -123,6 +131,10 @@ pub enum SymError {
 }
 pub type Result<T> = std::result::Result<T, SymError>;
 ```
+
+**As built:** `ReservedFlags(u8)` carries the offending flag byte, and `SymError`
+is `#[non_exhaustive]` — so the `exit_code` classifier in `symcrypt-common` keeps
+a catch-all `_ => EXIT_GENERAL` arm for any future variant.
 
 **Tests first**
 
@@ -194,19 +206,26 @@ ChaCha20-Poly1305 (§4.1, §5.3). 256-bit key, 96-bit nonce, 128-bit tag.
 ```rust
 pub enum CipherId { Aes256Gcm, ChaCha20Poly1305 } // FromStr/Display (§6.3), id byte (§5.3)
 impl CipherId {
-    pub(crate) fn id_byte(self) -> u8;                 // 0x01 / 0x02
-    pub(crate) fn from_id_byte(b: u8) -> Result<Self>; // else UnknownCipher
+    pub fn as_str(self) -> &'static str;          // exact lowercase name (backs Display)
+    pub(crate) fn id(self) -> u8;                 // 0x01 / 0x02
+    pub(crate) fn from_id(b: u8) -> Result<Self>; // else UnknownCipher
 }
-// nonce is the 12 bytes built by stream.rs; aad is the serialized header (chunk 0) or empty.
-pub(crate) fn seal(c: CipherId, key: &[u8;32], nonce: &[u8;12], aad: &[u8], pt: &[u8]) -> Result<Vec<u8>>;
-pub(crate) fn open(c: CipherId, key: &[u8;32], nonce: &[u8;12], aad: &[u8], ct: &[u8]) -> Result<Vec<u8>>; // tag fail → Auth
+// `Cipher` keys the chosen AEAD once with the 32-byte derived key, then seals/opens
+// each chunk. nonce is the 12 bytes built by stream.rs; aad is the serialized header
+// (chunk 0) or empty.
+enum Cipher { /* boxed Aes256Gcm | ChaCha20Poly1305 */ }
+impl Cipher {
+    pub(crate) fn new(id: CipherId, key: &[u8;32]) -> Self;
+    pub(crate) fn seal(&self, nonce: &[u8;12], aad: &[u8], pt: &[u8]) -> Result<Vec<u8>>; // AEAD overflow → InputTooLarge
+    pub(crate) fn open(&self, nonce: &[u8;12], aad: &[u8], ct: &[u8]) -> Result<Vec<u8>>; // tag fail → Auth
+}
 ```
 
 **Tests first**
 
 - `FromStr`/`Display` exact-lowercase round-trip: `aes-256-gcm`,
   `chacha20-poly1305`; reject aliases, uppercase, and unknown names (§6.3).
-- `id_byte` ↔ `from_id_byte` round-trip; `0x00`/`0x03`/`0xff` → `UnknownCipher`.
+- `id` ↔ `from_id` round-trip; `0x00`/`0x03`/`0xff` → `UnknownCipher`.
 - `seal` then `open` round-trips (incl. empty plaintext) for both ciphers.
 - `open` fails with `Auth` on any single-bit change to ciphertext, tag, nonce,
   key, or AAD.
@@ -230,22 +249,35 @@ with the §5.4 parameter encoding, range validation, and §12 defaults.
 
 ```rust
 pub enum KdfId { Argon2id, Scrypt, Pbkdf2 }  // FromStr/Display, id byte 0x01/0x02/0x03
+impl KdfId {
+    pub fn as_str(self) -> &'static str;
+    pub(crate) fn id(self) -> u8;
+    pub(crate) fn from_id(b: u8) -> Result<Self>; // else UnknownKdf
+}
 pub enum KdfParams {
     Argon2id { memory_kib: u32, time_cost: u32, parallelism: u32 },
     Scrypt   { log_n: u32, r: u32, p: u32 },
     Pbkdf2   { iterations: u32 },
 }
-impl KdfId  { pub fn default_params(self) -> KdfParams; /* §12 */ }
 impl KdfParams {
-    pub(crate) fn matches(&self, kdf: KdfId) -> bool;
-    /// pure range check (§5.4); caller maps false → MalformedHeader (read) or InvalidOptions (user).
-    pub(crate) fn ranges_ok(&self) -> bool;
-    pub(crate) fn to_wire(&self) -> (u32, u32, u32);
-    pub(crate) fn from_wire(kdf: KdfId, p1: u32, p2: u32, p3: u32) -> Result<Self>; // MalformedHeader on bad range
+    pub fn default_for(kdf: KdfId) -> Self;        /* §12 */
+    pub(crate) fn kdf_id(&self) -> KdfId;          // the "matches" check is `params.kdf_id() == kdf`
+    /// Range check (§5.4); returns the reason string on failure. Callers map
+    /// `Err(msg)` → MalformedHeader (read path) or InvalidOptions (user path).
+    pub(crate) fn validate(&self) -> std::result::Result<(), &'static str>;
+    pub(crate) fn to_words(self) -> (u32, u32, u32);
+    pub(crate) fn from_words(kdf: KdfId, p1: u32, p2: u32, p3: u32)
+        -> std::result::Result<Self, &'static str>; // range/reserved check; reason on failure
+    /// Derive the 32-byte key; a method on the params, dispatching on the variant.
+    pub(crate) fn derive_key(&self, secret_input: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>>;
 }
-pub(crate) fn derive_key(kdf: KdfId, p: &KdfParams, secret_input: &[u8], salt: &[u8])
-    -> Result<Zeroizing<[u8; 32]>>;
 ```
+
+**As built (naming):** `default_params` → `default_for`; `matches(kdf)` →
+`kdf_id() == kdf`; `ranges_ok() -> bool` → `validate() -> Result<(), &'static
+str>`; `to_wire`/`from_wire` → `to_words`/`from_words` (both return the reason
+string, not a `SymError`, so the caller chooses `MalformedHeader` vs
+`InvalidOptions`); `derive_key` is a method on `KdfParams`, not a free function.
 
 Range rules (§5.4) — validate **before** deriving:
 
@@ -262,22 +294,22 @@ Defaults (§12): Argon2id `{65536, 3, 1}`; scrypt `{15, 8, 1}`; PBKDF2 `{600000}
 - Determinism: same `(secret_input, salt, params)` → identical key; any change to
   secret, salt, or a param → different key (§10).
 - Each KDF yields exactly 32 bytes.
-- `ranges_ok` accepts both boundary values and rejects each just-out-of-range
+- `validate` accepts both boundary values and rejects each just-out-of-range
   value (low and high) for every parameter.
 - scrypt `128*N*r <= 1 GiB` cap rejects an in-individual-range-but-too-big combo
   (e.g. `log_n=20, r=32`).
-- PBKDF2 reserved: `from_wire` rejects non-zero `p2`/`p3`.
-- `to_wire`/`from_wire` round-trip for all three; `matches` correctness.
-- `default_params` returns the §12 values.
+- PBKDF2 reserved: `from_words` rejects non-zero `p2`/`p3`.
+- `to_words`/`from_words` round-trip for all three; `kdf_id()` correctness.
+- `default_for` returns the §12 values.
 - **KAT (locks behavior):** for one fixed `(secret_input, salt)` per KDF at
   fixed params, assert the derived key equals a committed hex constant.
 
 **Checklist**
 
 - [x] `KdfId`/`KdfParams`, id bytes, exact `FromStr`/`Display`.
-- [x] `ranges_ok` + `from_wire` enforcing every §5.4 bound incl. scrypt mem cap.
+- [x] `validate` + `from_words` enforcing every §5.4 bound incl. scrypt mem cap.
 - [x] `derive_key` for all three KDFs returning a zeroized 32-byte key.
-- [x] `default_params` matches §12.
+- [x] `default_for` matches §12.
 - [x] Determinism, boundary, reserved-field, and committed-KAT tests green.
 
 ---
@@ -285,26 +317,33 @@ Defaults (§12): Argon2id `{65536, 3, 1}`; scrypt `{15, 8, 1}`; PBKDF2 `{600000}
 ## Phase 5 — Header (`header.rs`)
 
 **Goal:** serialize/parse the §5.2 header, decode flags & name, and range-check
-everything on read. The serialized header is the AAD for chunk 0, so parse must
-hand back the **exact bytes consumed**.
+everything on read. The serialized header is the AAD for chunk 0, so `parse`
+stores the **exact bytes consumed** inside the returned `Header` and exposes them
+via `aad()` (rather than returning a `(Header, Vec<u8>)` tuple as first sketched).
 
 **API sketch**
 
 ```rust
 pub enum NameStatus { Absent, Present, IgnoredUnsafe } // drives --info name_status (§6.2)
 pub struct Header {
-    pub version: u8, pub cipher: CipherId, pub kdf: KdfId, pub kdf_params: KdfParams,
-    pub flags: u8, pub keyfile_hint: bool,
-    pub(crate) salt: Vec<u8>, pub salt_len: u8,
-    pub(crate) nonce_prefix: [u8; 7], pub nonce_prefix_len: u8,
-    pub chunk_size: u32,
+    pub version: u8, pub cipher: CipherId, pub kdf_params: KdfParams,
+    pub flags: u8, pub chunk_size: u32,
     pub name: Option<String>, pub name_status: NameStatus,
+    // private: salt: Vec<u8>, nonce_prefix: [u8; 7], serialized: Vec<u8> (the chunk-0 AAD)
 }
 impl Header {
-    pub(crate) fn serialize(&self) -> Vec<u8>;                 // encrypt path; this is the AAD
-    pub(crate) fn parse<R: Read>(r: &mut R) -> Result<(Header, Vec<u8>)>; // (header, raw AAD bytes)
+    pub fn kdf(&self) -> KdfId;              // derived from kdf_params (no separate field)
+    pub fn filename_present(&self) -> bool;  // flags bit0
+    pub fn keyfile_hint(&self) -> bool;      // flags bit1 (§4.2)
+    pub fn salt_len(&self) -> usize;         // accessor, not a stored field
+    pub fn nonce_prefix_len(&self) -> usize;
+    pub(crate) fn aad(&self) -> &[u8];       // the stored serialized header (chunk-0 AAD)
 }
-/// Shared basename safety check (§5.2), reused by EncryptOptions validation in lib.rs.
+// Free functions (not Header methods):
+pub(crate) fn serialize(cipher: CipherId, kdf_params: KdfParams, salt: &[u8],
+    nonce_prefix: &[u8; 7], chunk_size: u32, filename: Option<&str>, keyfile_used: bool) -> Vec<u8>;
+pub(crate) fn parse<R: Read>(reader: &mut R) -> Result<Header>; // AAD kept in Header, via aad()
+/// Shared basename safety check (§5.2), reused by EncryptOptions validation.
 pub(crate) fn is_safe_basename(name: &str) -> bool;
 ```
 
@@ -320,7 +359,7 @@ deriving keys, §5.7 / §11):
 3. `cipher_id` known else `UnknownCipher`; `kdf_id` known else `UnknownKdf`.
 4. `flags` bits 2–7 must be 0 else `ReservedFlags`; decode bit0 (name present),
    bit1 (`keyfile_hint`).
-5. `kdf_params = from_wire(...)` → range-checked (`MalformedHeader`).
+5. `kdf_params = from_words(...)` → range-checked (`MalformedHeader`).
 6. `salt_len ∈ 16..=64`, `nonce_prefix_len == 7`, `chunk_size ∈ 4096..=16777216`
    — else `MalformedHeader`.
 7. If name flag: `name_len ∈ 1..=255`; read bytes; non-UTF-8 → `MalformedHeader`;
@@ -330,7 +369,7 @@ deriving keys, §5.7 / §11):
 **Tests first**
 
 - `serialize` → `parse` round-trip for **every** cipher × kdf × {no-name,
-  safe-name} × {keyfile bit 0/1} combination; the returned raw bytes equal the
+  safe-name} × {keyfile bit 0/1} combination; `Header::aad()` equals the
   serialized input (AAD fidelity).
 - Byte-offset assertions against the §5.2 table on a hand-built header (magic at
   0, version at 8, …).
@@ -358,19 +397,26 @@ nonce, look-ahead finality, counter/size caps, progress, and cancellation.
 **API sketch**
 
 ```rust
-pub(crate) fn nonce(prefix: &[u8; 7], counter: u32, final_flag: bool) -> [u8; 12];
+fn make_nonce(prefix: &[u8; 7], counter: u32, final_flag: bool) -> [u8; 12];
 // prefix‖u32be(counter)‖final_flag(0x00|0x01)
+fn fill_random(buf: &mut [u8]) -> Result<()>; // getrandom::fill; RNG failure → Io
 
-pub(crate) fn encrypt_body<R: Read, W: Write>(
-    c: CipherId, key: &[u8;32], prefix: &[u8;7], chunk_size: u32, header_aad: &[u8],
-    input: R, output: W, size_cap: u64, on_progress: &mut OnProgress, plaintext_done: &mut u64,
-) -> Result<()>;
+// Whole-operation entry points (called by lib.rs). `encrypt` serializes the header
+// (chunk-0 AAD), derives the key, then STREAM-seals the body; `decrypt`/`verify`
+// parse the header, derive the key, then STREAM-open it.
+pub(crate) fn encrypt<R: Read, W: Write>(input: R, output: W, secret: &Secret,
+    opts: &EncryptOptions, input_len: Option<u64>, on_progress: &mut OnProgress<'_>) -> Result<()>;
+pub(crate) fn decrypt<R: Read, W: Write>(input: R, output: W, secret: &Secret,
+    input_len: Option<u64>, on_progress: &mut OnProgress<'_>) -> Result<()>;
+pub(crate) fn verify<R: Read>(input: R, secret: &Secret,        // = decrypt to io::sink()
+    input_len: Option<u64>, on_progress: &mut OnProgress<'_>) -> Result<()>;
 
-pub(crate) enum BodyMode { Decrypt, Verify }
-pub(crate) fn decrypt_body<R: Read, W: Write>(
-    c: CipherId, key: &[u8;32], prefix: &[u8;7], chunk_size: u32, header_aad: &[u8],
-    input: R, output: W, size_cap: u64, mode: BodyMode, on_progress: &mut OnProgress,
-) -> Result<()>;
+// Internal seams. encrypt_deterministic takes an explicit salt/nonce_prefix + cap
+// (production passes fill_random values + MAX_PLAINTEXT; tests pass fixed values /
+// small caps). decrypt_impl backs both decrypt and verify — there is NO BodyMode
+// enum; verify simply passes io::sink() as the output.
+fn encrypt_deterministic<R, W>(/* .. */ max_plaintext: u64, salt: &[u8;16], nonce_prefix: &[u8;7]) -> Result<()>;
+fn decrypt_impl<R, W>(/* .. */ max_plaintext: u64) -> Result<()>;
 ```
 
 Rules to implement:
@@ -389,14 +435,16 @@ Rules to implement:
   indistinguishable from tampering (§4.4, §5.5).
 - **Counter cap:** checked `+1` per chunk; exceeding 2³² chunks → encrypt
   `InputTooLarge`, decrypt `Auth` (§4.3).
-- **Size cap:** accumulate *plaintext* bytes; exceeding `size_cap` → encrypt
+- **Size cap:** accumulate *plaintext* bytes; exceeding the cap → encrypt
   `InputTooLarge` before finalizing; decrypt/verify `InputTooLarge` on
-  authenticated plaintext (stdout may already hold partial output) (§4.3).
-  `size_cap` is a parameter (lib passes the 64 GiB const; tests pass a small cap
-  to exercise the limit honestly without 64 GiB of data).
+  authenticated plaintext (stdout may already hold partial output) (§4.3). The
+  cap is the `max_plaintext` parameter of `encrypt_deterministic`/`decrypt_impl`
+  (the public `encrypt`/`decrypt`/`verify` pass the 64 GiB `MAX_PLAINTEXT` const;
+  tests pass a small cap to exercise the limit without 64 GiB of data).
 - **Progress/cancel:** call `on_progress` per chunk; `Break` → `Canceled`. (For
-  encrypt, progress counts plaintext consumed; the raw-input counter for
-  decrypt/verify lives in lib.rs, Phase 9.)
+  encrypt, progress counts plaintext consumed; for decrypt/verify, `decrypt_impl`
+  counts consumed input inline via an `input_done` accumulator seeded with
+  `header.aad().len()` — there is no separate `CountingReader` type.)
 
 **Tests first**
 
@@ -418,9 +466,9 @@ Rules to implement:
 
 **Checklist**
 
-- [x] `nonce` builder + tests.
-- [x] `encrypt_body` with look-ahead finality, counter & size caps, progress.
-- [x] `decrypt_body` (Decrypt + Verify) with AAD binding and structural→`Auth`.
+- [x] `make_nonce` builder + tests.
+- [x] `encrypt` (via the `encrypt_deterministic` seam) with look-ahead finality, counter & size caps, progress.
+- [x] `decrypt`/`verify` (shared `decrypt_impl`, verify → `io::sink()`) with AAD binding and structural→`Auth`.
 - [x] Round-trip across sizes, tamper/truncate/reorder, caps, cancel tests green.
 
 ---
@@ -433,16 +481,27 @@ strip on decrypt/verify/info.
 **API sketch**
 
 ```rust
-pub(crate) const BEGIN: &str = "-----BEGIN SYMCRYPT MESSAGE-----";
-pub(crate) const END:   &str = "-----END SYMCRYPT MESSAGE-----";
+pub(crate) const BEGIN_MARKER: &str = "-----BEGIN SYMCRYPT MESSAGE-----";
+pub(crate) const END_MARKER:   &str = "-----END SYMCRYPT MESSAGE-----";
+pub(crate) const LINE_COLUMNS: usize = 64; // base64 columns per line (48 input bytes)
 
-/// Writer adapter: base64 (RFC 4648 +/=), LF, lines wrapped at exactly 64 cols,
-/// BEGIN before body, END + single trailing LF on finish. Requires explicit finish().
+/// Writer adapter: base64 (RFC 4648 +/=), LF, lines wrapped at exactly 64 cols.
+/// `new` writes the BEGIN marker eagerly; `finish` flushes the last line and the
+/// END marker + single trailing LF. Requires explicit `finish()`.
 pub(crate) struct ArmorWriter<W: Write> { /* … */ }
-impl<W: Write> ArmorWriter<W> { pub(crate) fn new(w: W) -> Self; pub(crate) fn finish(self) -> Result<W>; }
+impl<W: Write> ArmorWriter<W> {
+    pub(crate) fn new(w: W) -> io::Result<Self>;  // emits BEGIN
+    pub(crate) fn finish(self) -> io::Result<()>; // emits last line + END
+}
 
-/// Peek the input; if armored, return a Read that strips markers + decodes base64.
-pub(crate) fn dearmor_if_armored<R: Read>(input: R) -> Result<Box<dyn Read>>;
+/// Reader that strips markers + decodes base64 (accepts LF/CRLF + surrounding
+/// whitespace; rejects junk / invalid base64 / missing END as MalformedHeader).
+pub(crate) struct ArmorReader<R: Read> { /* … */ }
+
+/// Peek the input; return a `DearmorReader` that is either the buffered binary
+/// passthrough or an `ArmorReader` over the body (replaces the `Box<dyn Read>` sketch).
+pub(crate) enum DearmorReader<R: Read> { /* Plain(buffer + R) | Armored(ArmorReader<R>) */ }
+pub(crate) fn auto_dearmor<R: Read>(input: R) -> Result<DearmorReader<R>>;
 ```
 
 Detection (§5.6): buffer the leading bytes, skip surrounding whitespace, and test
@@ -469,7 +528,7 @@ missing end marker → `MalformedHeader`.
 **Checklist**
 
 - [x] `ArmorWriter` (64-col wrap, LF, markers, explicit `finish`).
-- [x] `dearmor_if_armored` with peek-based detection and binary pass-through.
+- [x] `auto_dearmor` (returns a `DearmorReader` enum) with peek-based detection and binary pass-through.
 - [x] Round-trip, shape, accept (LF/CRLF/whitespace), and reject tests green
   (the committed armored KAT fixture lives with the stream KAT, Phase 10).
 
@@ -527,15 +586,15 @@ pub struct EncryptOptions {
 impl Default for EncryptOptions { /* §12 defaults */ }
 
 pub struct Progress { pub done: u64, pub total: Option<u64> }
-pub type OnProgress = dyn FnMut(Progress) -> std::ops::ControlFlow<()>;
+pub type OnProgress<'a> = dyn FnMut(Progress) -> std::ops::ControlFlow<()> + 'a; // 'a: a borrowing closure can cancel
 
 pub fn encrypt<R: Read, W: Write>(input: R, output: W, secret: &Secret,
-    opts: &EncryptOptions, input_len: Option<u64>, on_progress: &mut OnProgress) -> Result<()>;
+    opts: &EncryptOptions, input_len: Option<u64>, on_progress: &mut OnProgress<'_>) -> Result<()>;
 pub fn decrypt<R: Read, W: Write>(input: R, output: W, secret: &Secret,
-    input_len: Option<u64>, on_progress: &mut OnProgress) -> Result<()>;
+    input_len: Option<u64>, on_progress: &mut OnProgress<'_>) -> Result<()>;
 pub fn inspect<R: Read>(input: R) -> Result<Header>;
 pub fn verify<R: Read>(input: R, secret: &Secret, input_len: Option<u64>,
-    on_progress: &mut OnProgress) -> Result<()>;
+    on_progress: &mut OnProgress<'_>) -> Result<()>;
 ```
 
 Constants: the 64 GiB plaintext cap is the module-private `MAX_PLAINTEXT` in
@@ -545,40 +604,49 @@ default chunk size comes from `EncryptOptions::default()` rather than a named
 constant. The only public constant is `KEYFILE_MAX_BYTES` (1 MiB, from
 `secret.rs`, Phase 2); §2.3 does not require the rest to be public.
 
-**`encrypt` flow** (§2.4, §4.2, §4.3, §5.4):
+**`encrypt` flow** (§2.4, §4.2, §4.3, §5.4) — `lib::encrypt` only wraps `output`
+in an `ArmorWriter` (and `finish()`es it) when `opts.armor`, then delegates to
+`stream::encrypt`, which runs the steps below through the `encrypt_deterministic`
+seam:
 
-1. Validate `EncryptOptions` → `InvalidOptions`: `kdf_params.matches(kdf)`,
-   `ranges_ok()`, `chunk_size` in range, and `filename` (if any)
+1. `opts.validate()` → `InvalidOptions`: `kdf_params.kdf_id() == kdf`,
+   `kdf_params.validate()`, `chunk_size` in range, and `filename` (if any)
    `is_safe_basename`. (Guarantees a programmatic header can't fail its own read
    validation, §5.4.)
-2. Cancellation check; generate `salt` (16) + `nonce_prefix` (7) from `OsRng`.
-3. Build `Header` (flags from `filename.is_some()` and
-   `secret.has_keyfile()`); `serialize()` → `aad`.
-4. `derive_key`; cancellation check after KDF.
-5. Wrap `output` in `ArmorWriter` when `opts.armor`; write the header bytes,
-   then `stream::encrypt_body(..., PLAINTEXT_CAP, ...)`; `finish()` the armor.
+2. `fill_random` the `salt` (16) + `nonce_prefix` (7) from the OS RNG
+   (`getrandom::fill`); cancellation check before key derivation.
+3. `header::serialize(cipher, kdf_params, salt, nonce_prefix, chunk_size,
+   filename, secret.has_keyfile())` → the header bytes / chunk-0 AAD.
+4. `kdf_params.derive_key`; cancellation check after KDF.
+5. Write the header bytes, then STREAM-seal the body with `MAX_PLAINTEXT` as the cap.
 
-**`decrypt`/`verify` flow:**
+**`decrypt`/`verify` flow:** `lib::decrypt`/`verify` call `armor::auto_dearmor`
+on `input`, then `stream::decrypt` (to `output`) or `stream::verify` (to
+`io::sink()`). Inside `decrypt_impl`:
 
-1. Wrap raw `input` in a `CountingReader` (so progress `done` counts
-   caller-provided bytes — armored bytes for armored input, §2.3).
-2. `dearmor_if_armored`; `Header::parse` → `(header, aad)`.
-3. Cancellation check; `derive_key`; cancellation check after KDF.
-4. `stream::decrypt_body` to `output` (decrypt) or `io::sink()` (verify), mode
-   set accordingly; progress reads the counting reader's position.
+1. `header::parse` → `Header` (the chunk-0 AAD is kept inside it, via `aad()`);
+   cancellation check before key derivation.
+2. `kdf_params.derive_key`; cancellation check after KDF.
+3. `Cipher::new(header.cipher, &key)`, then STREAM-open each chunk to `output`.
+   Consumed input is counted inline (`input_done`, seeded with `aad().len()`) and
+   fed to `on_progress`; there is no separate `CountingReader`. **As built,**
+   because `auto_dearmor` strips the armor first, progress `done` counts the
+   dearmored input bytes, not the raw armored bytes the §2.3 sketch named.
 
 **`inspect`:** dearmor + `Header::parse`, return the `Header`; no secret, no
 body read, unauthenticated (powers `--info`, §6.2).
 
 **Progress note:** encrypt reports plaintext-consumed; decrypt/verify report
-raw-input-consumed via `CountingReader`. The size cap is always enforced from
-plaintext bytes, never from `input_len` (advisory only, §2.3, §4.3).
+consumed input counted inline by `decrypt_impl` (the dearmored bytes — no
+`CountingReader`). The size cap is always enforced from plaintext bytes, never
+from `input_len` (advisory only, §2.3, §4.3).
 
 **Deterministic seam for KAT:** `stream.rs` defines `fn encrypt_deterministic(...)`
 taking an explicit `salt: &[u8; 16]`, `nonce_prefix: &[u8; 7]`, and plaintext
-cap; the normal `encrypt` path calls it with `OsRng` values and `MAX_PLAINTEXT`.
-In-crate KAT unit tests call it with fixed entropy so re-encryption reproduces
-committed fixtures byte-for-byte (§10); production always uses `OsRng`.
+cap; the normal `encrypt` path calls it with OS-random (`getrandom::fill`) values
+and `MAX_PLAINTEXT`. In-crate KAT unit tests call it with fixed entropy so
+re-encryption reproduces committed fixtures byte-for-byte (§10); production always
+uses fresh OS randomness.
 
 **Tests first** (smoke-level here; exhaustive coverage is Phase 10)
 
@@ -593,8 +661,8 @@ committed fixtures byte-for-byte (§10); production always uses `OsRng`.
 **Checklist**
 
 - [x] `EncryptOptions` (+ `Default` = §12), `Progress`, `OnProgress` (defined in `stream.rs`, re-exported by `lib.rs`); internal caps/lengths + public `KEYFILE_MAX_BYTES`.
-- [x] `encrypt` with option validation, OsRng entropy, armor wrap, AAD binding.
-- [x] `decrypt`/`verify` with `CountingReader`, dearmor, sink-for-verify.
+- [x] `encrypt` with option validation, `getrandom::fill` entropy, armor wrap, AAD binding.
+- [x] `decrypt`/`verify` with `auto_dearmor`, inline input counting, sink-for-verify.
 - [x] `inspect` returning unauthenticated `Header`.
 - [x] `encrypt_deterministic` seam (in `stream.rs`) for deterministic KAT.
 - [x] Smoke round-trip / option-validation / cancel tests green.
@@ -657,21 +725,44 @@ vectors (no `tests/vectors/` directory):
 **Responsibilities & API sketch**
 
 ```rust
-// Exit-code mapping — the ONLY place SymError is classified (§6.6).
+// error.rs — exit-code mapping (the ONLY place SymError is classified, §6.6) plus
+// the front-end error type. SymError is #[non_exhaustive], so exit_code keeps a
+// catch-all `_ => EXIT_GENERAL`.
+pub const EXIT_OK/EXIT_GENERAL/EXIT_USAGE/EXIT_AUTH/EXIT_FORMAT/EXIT_CANCELED: i32; // 0/1/2/3/4/130
 pub fn exit_code(err: &SymError) -> i32; // Auth→3, BadMagic/Version/Cipher/Kdf/ReservedFlags/Malformed→4,
-                                         // InvalidOptions→2, Canceled→130, Io/InputTooLarge→1
+                                         // InvalidOptions→2, Canceled→130, Io/InputTooLarge/_→1
+pub enum AppError { Core(SymError), Usage(String), Io(io::Error) } // replaces the sketch's `UsageError`
+impl AppError { pub fn usage(msg: impl Into<String>) -> Self; pub fn exit_code(&self) -> i32; }
+pub type AppResult<T> = Result<T, AppError>;
 
-// Password-source resolution (§6.4): at most one of inline/file/env/no-password.
-pub enum PasswordSource<'a> { Inline(&'a [u8]), File(&'a Path), Env(&'a OsStr), NoPassword }
-pub fn resolve_secret(src: PasswordSource, keyfile: Option<&Path>) -> Result<Secret, UsageError>;
+// password.rs — password-source resolution (§6.4). `resolve_secret` is split into
+// three steps; the front-end assembles the Secret via Secret::new(password, keyfile).
+pub enum PasswordSource { Inline(Zeroizing<Vec<u8>>), File(PathBuf), Env(OsString), NoPassword }
+pub fn password_source_from_flags(inline: Option<Vec<u8>>, file: Option<PathBuf>,
+    env: Option<OsString>, no_password: bool) -> AppResult<Option<PasswordSource>>; // exclusivity; None ⇒ prompt
+pub fn resolve_password(source: &PasswordSource) -> AppResult<Zeroizing<Vec<u8>>>;  // empty-source rules (§6.4)
+pub fn read_keyfile(path: &Path) -> AppResult<Zeroizing<Vec<u8>>>;                  // 1..=1 MiB; -/non-regular rejected
 
-// Path-or-stdin I/O + finalization (§6.5).
-pub fn open_input(path: &OsStr) -> ...;        // "-"=stdin; else existing regular file (+ len for progress)
-pub fn finalize_output(dst: &Path, force: bool, write: impl FnOnce(&mut File)->Result<()>) -> ...;
-                                               // sibling temp, 0600 on Unix, rename on success, remove on error
-pub fn same_file(input: &Path, output: &Path) -> bool;  // symlink-resolved; hardlink identity where available
-pub fn best_effort_remove(path: &Path) -> RemoveOutcome; // --remove: warn-but-Ok on failure
+// fs.rs — path-or-stdin I/O + clobber + finalization (§6.5). `finalize_output` is
+// realized as `open_output` returning an `OutputSink` you write into, then commit.
+pub fn is_stdio(path: &Path) -> bool;                 // "-"
+pub fn require_regular_file(path: &Path) -> AppResult<()>;
+pub fn open_input(path: &Path) -> AppResult<Box<dyn Read>>;  // "-"=stdin; else existing regular file
+pub fn open_output(target: &Path, force: bool, input: Option<&Path>) -> AppResult<OutputSink>;
+                                               // clobber + same-file checks; sibling temp, 0600 on Unix
+pub enum OutputSink { Stdout(io::Stdout), File(FileSink) }
+impl OutputSink { pub fn as_write(&mut self) -> &mut dyn Write; pub fn commit(self) -> AppResult<()>; }
+                                               // commit: flush stdout / rename temp into place; temp removed on error
+pub fn is_same_file(a: &Path, b: &Path) -> bool;          // symlink-resolved; hardlink identity where available
+pub fn best_effort_remove(path: &Path) -> io::Result<()>; // --remove: caller treats failure as warn-but-Ok
 ```
+
+**As built (naming/shape):** `UsageError` → `AppError`/`AppResult`;
+`resolve_secret` → `password_source_from_flags` + `resolve_password` +
+`read_keyfile` (the `Secret` is assembled in the front-end); `finalize_output`
+(write-closure) → `open_output` returning `OutputSink` with `as_write`/`commit`;
+`same_file` → `is_same_file`; `RemoveOutcome` → `io::Result<()>`; `open_input`
+takes `&Path`, not `&OsStr`.
 
 Rules to enforce (from §6.4/§6.5):
 
