@@ -3,7 +3,7 @@
 //! This crate does all the work; the front-ends are thin views over it. It
 //! never reads argv, never prompts, never touches the filesystem on its own,
 //! never decides whether to overwrite, and never exits the process. See
-//! `DESIGN.md` for the authoritative specification.
+//! `docs/DESIGN.md` for the authoritative specification.
 //!
 //! Every front-end calls the same four operations — [`encrypt`], [`decrypt`],
 //! [`inspect`], and [`verify`] — over generic `Read`/`Write`, reporting progress

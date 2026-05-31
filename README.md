@@ -10,8 +10,8 @@ out-of-band parameters.
 > format, streaming, helpers) and `symcrypt-common` (terminal glue) — and the
 > `symcrypt` command-line front-end are implemented and tested. The
 > `symcrypt-tui` and `symcrypt-gtk` binaries remain scaffold stubs; they are
-> built out in `IMPLEMENTATION_PLAN_03_TUI.md` and `_04_GTK.md`.
-> [`DESIGN.md`](DESIGN.md) is the authoritative specification.
+> built out in `docs/IMPLEMENTATION_PLAN_03_TUI.md` and `_04_GTK.md`.
+> [`DESIGN.md`](docs/DESIGN.md) is the authoritative specification.
 
 ## Highlights
 
@@ -79,7 +79,7 @@ cargo install --path crates/symcrypt-cli
 (`-` means stdin). With no password source it prompts interactively (no echo);
 non-interactively, supply `-p`, `--password-file`, `--password-env`, and/or a
 keyfile (`-k`). See `symcrypt --help` for every option and
-[`DESIGN.md`](DESIGN.md) §6 for the full specification.
+[`DESIGN.md`](docs/DESIGN.md) §6 for the full specification.
 
 ```sh
 symcrypt -e report.pdf                      # → report.pdf.symcrypt (prompts for a password)
@@ -152,7 +152,7 @@ PEM-style `-----BEGIN/END SYMCRYPT MESSAGE-----` markers.
   (7-byte random prefix ‖ u32 counter ‖ final-flag).
 
 The full wire format, threat model, and parameter ranges are specified in
-[`DESIGN.md`](DESIGN.md) (§4–§5).
+[`DESIGN.md`](docs/DESIGN.md) (§4–§5).
 
 ## Security notes
 
@@ -166,14 +166,14 @@ The full wire format, threat model, and parameter ranges are specified in
 - Key material is wrapped in `zeroize` and wiped on drop, but secrets paged to
   swap cannot be controlled.
 
-See [`DESIGN.md`](DESIGN.md) §3 and §11 for the full threat model and security
+See [`DESIGN.md`](docs/DESIGN.md) §3 and §11 for the full threat model and security
 considerations.
 
 ## Documentation
 
-- [`DESIGN.md`](DESIGN.md) — the authoritative specification (architecture,
+- [`DESIGN.md`](docs/DESIGN.md) — the authoritative specification (architecture,
   threat model, crypto design, exact file format, CLI/TUI/GTK specs, defaults).
-- `IMPLEMENTATION_PLAN_01_CORE.md` … `_04_GTK.md` — per-component build plans.
+- `docs/IMPLEMENTATION_PLAN_01_CORE.md` … `_04_GTK.md` — per-component build plans.
 
 ## License
 

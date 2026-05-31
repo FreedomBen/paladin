@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Agent Instructions
 
-- `DESIGN.md` is the source of truth for how the application and library should work.  If the user requests a change that conflicts, update DESIGN.md so it stays in sync.
-- When changing the CLI, TUI, or GTK, update the relevant `IMPLEMENTATION_PLAN_0X_*.md` with the new behavior and API details before implementing it.  This keeps design and implementation aligned.
+- `docs/DESIGN.md` is the source of truth for how the application and library should work.  If the user requests a change that conflicts, update docs/DESIGN.md so it stays in sync.
+- When changing the CLI, TUI, or GTK, update the relevant `docs/IMPLEMENTATION_PLAN_0X_*.md` with the new behavior and API details before implementing it.  This keeps design and implementation aligned.
 - Write exhaustive tests that cover base functionality and any edge cases, particularly for the core shared library.
 - Use a Test Driven Development (TDD) approach: write failing tests before implementing features, then implement the code to make the tests pass.
 - After changing code, format and lint it with `cargo fmt` and `cargo clippy`, ensuring no warnings remain.
@@ -27,13 +27,13 @@ crypto, file format, streaming, armor, pure helpers) and **`symcrypt-common`**
 (terminal glue) — and the **`symcrypt`** command-line front-end are implemented and
 tested. The remaining front-end binaries (`symcrypt-tui`, `symcrypt-gtk`) are still
 scaffold stubs that print a "not yet implemented" message and exit `2`; they are
-built out in `IMPLEMENTATION_PLAN_03_TUI.md` and `_04_GTK.md`. Treat `DESIGN.md` as
+built out in `docs/IMPLEMENTATION_PLAN_03_TUI.md` and `_04_GTK.md`. Treat `docs/DESIGN.md` as
 the source of truth for how everything should behave.
 
-- **`DESIGN.md`** — the authoritative specification: architecture, threat model,
+- **`docs/DESIGN.md`** — the authoritative specification: architecture, threat model,
   cryptographic design, the exact binary file format, CLI/TUI/GTK specs,
   dependencies, testing strategy, and defaults. Read it before implementing.
-- **`IMPLEMENTATION_PLAN_01_CORE.md` … `_04_GTK.md`** — per-component checklists
+- **`docs/IMPLEMENTATION_PLAN_01_CORE.md` … `_04_GTK.md`** — per-component checklists
   (core+common, CLI, TUI, GTK) defining build order. `01_CORE` comes first; the
   three front-ends all depend on it.
 - `TODO.md` is git-ignored and maintained by humans — do not rely on it.
@@ -50,7 +50,7 @@ only the password/keyfile — no out-of-band parameters.
 This is a standard multi-crate Cargo workspace and it builds today: `symcrypt-core`,
 `symcrypt-common`, and the `symcrypt` CLI are implemented and tested, while the
 `symcrypt-tui` and `symcrypt-gtk` binaries are scaffold stubs that compile but exit
-`2` ("not yet implemented") until built out per `IMPLEMENTATION_PLAN_03_TUI.md` and
+`2` ("not yet implemented") until built out per `docs/IMPLEMENTATION_PLAN_03_TUI.md` and
 `_04_GTK.md`.
 
 | Task                       | Command                                                                              |

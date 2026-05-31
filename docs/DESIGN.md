@@ -79,12 +79,13 @@ same code path.
 ```
 symcrypt/
 ├── Cargo.toml                 # workspace manifest
-├── DESIGN.md
-├── IMPLEMENTATION_PLAN_01_CORE.md   # per-component implementation plans (stubs)
-├── IMPLEMENTATION_PLAN_02_CLI.md
-├── IMPLEMENTATION_PLAN_03_TUI.md
-├── IMPLEMENTATION_PLAN_04_GTK.md
-├── README.md                  # (later)
+├── README.md
+├── docs/
+│   ├── DESIGN.md
+│   ├── IMPLEMENTATION_PLAN_01_CORE.md   # per-component implementation plans
+│   ├── IMPLEMENTATION_PLAN_02_CLI.md
+│   ├── IMPLEMENTATION_PLAN_03_TUI.md
+│   └── IMPLEMENTATION_PLAN_04_GTK.md
 └── crates/
     ├── symcrypt-core/         # library — ALL crypto, format, streaming, pure helpers
     │   ├── src/
