@@ -9,6 +9,7 @@
 //! library plus a thin binary so those helpers form a public surface (and so are
 //! not spuriously flagged as dead code while the UI is wired up incrementally).
 
+pub mod fsio;
 pub mod info;
 pub mod message;
 pub mod mode;
