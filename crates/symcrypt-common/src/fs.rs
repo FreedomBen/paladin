@@ -264,4 +264,46 @@ mod tests {
         assert!(!file.exists());
         assert!(best_effort_remove(&file).is_err());
     }
+
+    #[test]
+    fn dash_opens_stdin_and_stdout() {
+        // The "-" marker is recognized; real paths are not.
+        assert!(is_stdio(Path::new("-")));
+        assert!(!is_stdio(Path::new("file")));
+        // open_input("-") yields a reader without touching the filesystem.
+        // Do NOT read from it here; that would block on the real stdin.
+        assert!(open_input(Path::new("-")).is_ok());
+        // open_output("-") is stdout and commits by flushing (no bytes written).
+        let sink = open_output(Path::new("-"), false, None).unwrap();
+        assert!(matches!(sink, OutputSink::Stdout(_)));
+        sink.commit().unwrap();
+    }
+
+    #[test]
+    fn is_same_file_distinguishes_different_and_missing_paths() {
+        let dir = TempDir::new().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        write_file(&a, b"x");
+        write_file(&b, b"x");
+        // Two distinct files are not the same file.
+        assert!(!is_same_file(&a, &b));
+        // A missing operand makes the comparison false, not an error.
+        let missing = dir.path().join("missing");
+        assert!(!is_same_file(&a, &missing));
+        assert!(!is_same_file(&missing, &dir.path().join("also_missing")));
+    }
+
+    #[test]
+    fn output_differing_from_input_is_allowed() {
+        let dir = TempDir::new().unwrap();
+        let input = dir.path().join("in");
+        let target = dir.path().join("out");
+        write_file(&input, b"plaintext");
+        // A distinct input must not trip the same-file guard, even with force off.
+        let mut sink = open_output(&target, false, Some(&input)).unwrap();
+        sink.as_write().write_all(b"ciphertext").unwrap();
+        sink.commit().unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"ciphertext");
+    }
 }

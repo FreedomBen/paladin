@@ -152,7 +152,12 @@ fn trim_one_trailing_newline(buf: &mut Zeroizing<Vec<u8>>) {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    // Serializes the env-mutating tests against each other and the read-only
+    // unset test, so concurrent libc setenv/getenv can never race in this binary.
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     fn write_file(dir: &TempDir, name: &str, contents: &[u8]) -> PathBuf {
         let path = dir.path().join(name);
@@ -201,6 +206,7 @@ mod tests {
 
     #[test]
     fn env_unset_is_a_usage_error() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let src = PasswordSource::Env(OsString::from("SYMCRYPT_TEST_DEFINITELY_UNSET_abc123"));
         assert!(matches!(resolve_password(&src), Err(AppError::Usage(_))));
     }
@@ -267,5 +273,62 @@ mod tests {
             Err(AppError::Usage(_))
         ));
         assert!(matches!(read_keyfile(dir.path()), Err(AppError::Usage(_)))); // directory
+    }
+
+    #[test]
+    fn env_set_returns_bytes_and_empty_is_rejected() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let name = "SYMCRYPT_TEST_ENV_SET_xyz789";
+        std::env::set_var(name, "s3cret value");
+        let src = PasswordSource::Env(OsString::from(name));
+        assert_eq!(&*resolve_password(&src).unwrap(), b"s3cret value");
+        // A set-but-empty variable is a usage error, never a silent downgrade.
+        std::env::set_var(name, "");
+        assert!(matches!(resolve_password(&src), Err(AppError::Usage(_))));
+        std::env::remove_var(name);
+    }
+
+    #[test]
+    fn from_flags_selects_correct_variant() {
+        assert!(matches!(
+            password_source_from_flags(Some(b"x".to_vec()), None, None, false).unwrap(),
+            Some(PasswordSource::Inline(_))
+        ));
+        assert!(matches!(
+            password_source_from_flags(None, Some(PathBuf::from("f")), None, false).unwrap(),
+            Some(PasswordSource::File(_))
+        ));
+        assert!(matches!(
+            password_source_from_flags(None, None, Some(OsString::from("V")), false).unwrap(),
+            Some(PasswordSource::Env(_))
+        ));
+        assert!(matches!(
+            password_source_from_flags(None, None, None, true).unwrap(),
+            Some(PasswordSource::NoPassword)
+        ));
+    }
+
+    #[test]
+    fn file_and_keyfile_at_exact_size_limit_are_accepted() {
+        let dir = TempDir::new().unwrap();
+        // A password file of exactly the limit (no trailing newline) is kept whole.
+        let pw = write_file(&dir, "pw_max", &vec![b'a'; PASSWORD_FILE_MAX]);
+        assert_eq!(
+            resolve_password(&PasswordSource::File(pw)).unwrap().len(),
+            PASSWORD_FILE_MAX
+        );
+        // A keyfile of exactly the limit is accepted.
+        let kf = write_file(&dir, "kf_max", &vec![0u8; KEYFILE_MAX_BYTES]);
+        assert_eq!(read_keyfile(&kf).unwrap().len(), KEYFILE_MAX_BYTES);
+    }
+
+    #[test]
+    fn password_file_keeps_content_without_trailing_newline() {
+        let dir = TempDir::new().unwrap();
+        let p = write_file(&dir, "pw_no_nl", b"secret");
+        assert_eq!(
+            &*resolve_password(&PasswordSource::File(p)).unwrap(),
+            b"secret"
+        );
     }
 }
