@@ -4,7 +4,7 @@
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Clear, Paragraph, Tabs, Wrap};
+use ratatui::widgets::{Block, Clear, Gauge, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
 
 use crate::app::{App, Focus, Mode, RunStatus};
@@ -157,11 +157,28 @@ fn row_content(app: &App, focus: Focus) -> (String, Option<u16>) {
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
+    // A running operation shows a determinate gauge (TUI input is always a file).
+    if let RunStatus::Running { done, total } = app.status {
+        let ratio = match total {
+            Some(t) if t > 0 => (done as f64 / t as f64).clamp(0.0, 1.0),
+            _ => 0.0,
+        };
+        let gauge = Gauge::default()
+            .gauge_style(Style::default().fg(Color::Cyan))
+            .ratio(ratio)
+            .label(format!("{}%", (ratio * 100.0) as u16));
+        f.render_widget(gauge, area);
+        return;
+    }
     let (text, style) = if let Some(err) = &app.field_error {
         (err.clone(), Style::default().fg(Color::Red))
     } else {
         match &app.status {
             RunStatus::Idle => (String::new(), Style::default()),
+            RunStatus::Done(m) => (format!("\u{2714} {m}"), Style::default().fg(Color::Green)),
+            RunStatus::Failed(m) => (format!("\u{2718} {m}"), Style::default().fg(Color::Red)),
+            RunStatus::Canceled => ("canceled".to_string(), Style::default().fg(Color::Yellow)),
+            RunStatus::Running { .. } => unreachable!("handled above"),
         }
     };
     f.render_widget(Paragraph::new(text).style(style), area);

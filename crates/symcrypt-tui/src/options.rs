@@ -8,7 +8,7 @@ use std::ops::RangeInclusive;
 
 use symcrypt_core as core;
 
-use core::{CipherId, EncryptOptions, KdfId, KdfParams};
+use core::{CipherId, EncryptOptions, KdfId, KdfParams, Secret};
 
 // §5.4 ranges, mirrored from core. Kept in sync with `symcrypt-core::kdf`.
 const ARGON2_MEMORY_KIB: RangeInclusive<u32> = 8192..=1_048_576;
@@ -187,6 +187,34 @@ pub fn build_encrypt_options(
     })
 }
 
+/// Assemble a [`Secret`] from the UI's password/confirm/keyfile bytes per
+/// DESIGN §6.4. `confirm` is `Some` only on Encrypt (where it must match).
+/// `keyfile_only` is the `--no-password` equivalent: it requires a keyfile and
+/// forces an empty password. The core re-validates and zeroizes internally.
+pub fn assemble_secret(
+    password: &[u8],
+    confirm: Option<&[u8]>,
+    keyfile: Option<&[u8]>,
+    keyfile_only: bool,
+) -> Result<Secret, String> {
+    if keyfile_only {
+        let kf = keyfile
+            .filter(|k| !k.is_empty())
+            .ok_or("keyfile-only mode requires a keyfile")?;
+        return Secret::new(&[], Some(kf)).map_err(|e| e.to_string());
+    }
+    if let Some(confirm) = confirm {
+        if password != confirm {
+            return Err("passwords do not match".to_string());
+        }
+    }
+    // An empty password is accepted only via keyfile-only mode (§6.4).
+    if password.is_empty() {
+        return Err("enter a password (or enable keyfile-only)".to_string());
+    }
+    Secret::new(password, keyfile).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,5 +345,29 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("'/'"), "{err}");
+    }
+
+    #[test]
+    fn secret_encrypt_requires_matching_confirm() {
+        let err = assemble_secret(b"abc", Some(b"abd"), None, false).unwrap_err();
+        assert!(err.contains("do not match"), "{err}");
+        assert!(assemble_secret(b"abc", Some(b"abc"), None, false).is_ok());
+    }
+
+    #[test]
+    fn secret_rejects_empty_password_without_keyfile_only() {
+        assert!(assemble_secret(b"", Some(b""), None, false).is_err());
+        assert!(assemble_secret(b"", None, None, false).is_err()); // decrypt/verify
+    }
+
+    #[test]
+    fn secret_keyfile_only_requires_keyfile() {
+        assert!(assemble_secret(b"", None, None, true).is_err());
+        assert!(assemble_secret(b"", None, Some(b"keymaterial"), true).is_ok());
+    }
+
+    #[test]
+    fn secret_password_plus_keyfile_is_ok() {
+        assert!(assemble_secret(b"pw", None, Some(b"keymaterial"), false).is_ok());
     }
 }

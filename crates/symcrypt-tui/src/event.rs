@@ -17,11 +17,21 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         return;
     }
 
+    // While an operation runs, only quit and cancel are honored.
+    if app.is_running() {
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => app.should_quit = true,
+            (KeyCode::Esc, _) => app.request_cancel(),
+            _ => {}
+        }
+        return;
+    }
+
     let target = app.focus_target();
     match (key.code, key.modifiers) {
         (KeyCode::Char('c'), KeyModifiers::CONTROL) => app.should_quit = true,
-        // Esc quits while idle; cancels a run once the worker lands.
         (KeyCode::Esc, _) => app.should_quit = true,
+        (KeyCode::Enter, _) => app.start_run(),
         (KeyCode::Tab, _) => app.focus_next(),
         (KeyCode::BackTab, _) => app.focus_prev(),
         _ if target.is_text() => text_key(app, target, key.code),
@@ -74,7 +84,6 @@ fn widget_key(app: &mut App, target: Focus, code: KeyCode) {
         (Focus::Kdf, KeyCode::Right) => app.cycle_kdf(true),
         // `?` opens help only off a text field (so '?' can be typed into paths).
         (_, KeyCode::Char('?')) => app.help = true,
-        (Focus::Advanced, KeyCode::Enter) => app.toggle(Focus::Advanced),
         (_, KeyCode::Char(' ')) => app.toggle(target),
         _ => {}
     }

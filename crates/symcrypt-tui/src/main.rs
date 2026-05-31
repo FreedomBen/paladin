@@ -6,14 +6,17 @@
 mod app;
 mod event;
 mod field;
+mod info;
 mod options;
 mod ui;
+mod worker;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
-use crossterm::event::{read, Event, KeyEventKind};
+use crossterm::event::{poll, read, Event, KeyEventKind};
 
 use app::App;
 
@@ -54,11 +57,22 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, initial: Option<String>) ->
     let mut app = App::new(initial);
     while !app.should_quit {
         terminal.draw(|f| ui::draw(f, &app))?;
-        if let Event::Key(key) = read()? {
-            if key.kind == KeyEventKind::Press {
-                event::handle_key(&mut app, key);
+        // Poll so progress can be pumped while a worker runs; tighter when busy.
+        let timeout = if app.is_running() {
+            Duration::from_millis(50)
+        } else {
+            Duration::from_millis(200)
+        };
+        if poll(timeout)? {
+            if let Event::Key(key) = read()? {
+                if key.kind == KeyEventKind::Press {
+                    event::handle_key(&mut app, key);
+                }
             }
         }
+        app.pump();
     }
+    // Cancel and join any in-flight worker, removing its temp output.
+    app.shutdown();
     Ok(app.exit_code())
 }

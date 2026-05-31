@@ -8,7 +8,9 @@ use symcrypt_core as core;
 use core::{CipherId, KdfId};
 
 use crate::field::Editor;
+use crate::info;
 use crate::options::{self, KdfKnobs};
+use crate::worker;
 
 /// Selectable ciphers, in display order.
 const CIPHERS: [CipherId; 2] = [CipherId::Aes256Gcm, CipherId::ChaCha20Poly1305];
@@ -112,11 +114,14 @@ impl Focus {
     }
 }
 
-/// Status of the most recent / in-flight operation. Extended with the running,
-/// done, failed, and canceled states when the worker lands.
+/// Status of the most recent / in-flight operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RunStatus {
     Idle,
+    Running { done: u64, total: Option<u64> },
+    Done(String),
+    Failed(String),
+    Canceled,
 }
 
 /// Top-level application state.
@@ -164,6 +169,11 @@ pub struct App {
     pub info_lines: Vec<String>,
     pub field_error: Option<String>,
     pub help: bool,
+
+    /// Active worker, if an operation is running.
+    pub run: Option<worker::Run>,
+    /// Exit code of the last completed operation (0 until one runs).
+    pub last_exit: i32,
 }
 
 impl App {
@@ -205,14 +215,21 @@ impl App {
             info_lines: Vec::new(),
             field_error: None,
             help: false,
+            run: None,
+            last_exit: 0,
         };
         app.sync_paths();
         app
     }
 
-    /// Process exit code for a normal quit (refined as operations land).
+    /// Process exit code for a normal quit: the last completed operation's code.
     pub fn exit_code(&self) -> i32 {
-        0
+        self.last_exit
+    }
+
+    /// Is an operation currently running on the worker thread?
+    pub fn is_running(&self) -> bool {
+        self.run.is_some()
     }
 
     /// The KDF knob fields visible for the currently selected KDF.
@@ -444,6 +461,224 @@ impl App {
         }
     }
 
+    fn fail_field(&mut self, msg: impl Into<String>) {
+        self.field_error = Some(msg.into());
+    }
+
+    /// Start the operation for the current mode (no-op while one is running).
+    /// Info runs inline; the others spawn the worker thread.
+    pub fn start_run(&mut self) {
+        if self.is_running() {
+            return;
+        }
+        self.info_lines.clear();
+        match self.mode {
+            Mode::Info => self.run_info_inline(),
+            _ => self.start_worker(),
+        }
+    }
+
+    /// Inspect the input header inline (no secret, no thread).
+    fn run_info_inline(&mut self) {
+        let input = match validate_input(self.input.text()) {
+            Ok(p) => p,
+            Err(msg) => {
+                self.fail_field(msg);
+                return;
+            }
+        };
+        let result = common::open_input(&input)
+            .and_then(|mut r| core::inspect(&mut r).map_err(common::AppError::from));
+        match result {
+            Ok(header) => {
+                self.info_lines = info::format_info(&header);
+                self.field_error = None;
+                self.status = RunStatus::Done("inspected".to_string());
+                self.last_exit = 0;
+            }
+            Err(e) => {
+                self.info_lines.clear();
+                self.last_exit = e.exit_code();
+                self.status = RunStatus::Failed(e.to_string());
+            }
+        }
+    }
+
+    /// Validate all visible fields, build a [`worker::Job`], and spawn it. Any
+    /// validation failure sets an inline error and leaves the status untouched.
+    fn start_worker(&mut self) {
+        let input = match validate_input(self.input.text()) {
+            Ok(p) => p,
+            Err(msg) => {
+                self.fail_field(msg);
+                return;
+            }
+        };
+
+        let keyfile_bytes = if !self.keyfile.is_empty() {
+            match common::read_keyfile(Path::new(self.keyfile.text())) {
+                Ok(bytes) => Some(bytes),
+                Err(e) => {
+                    self.fail_field(e.to_string());
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+
+        let confirm = if self.mode == Mode::Encrypt {
+            Some(self.confirm.text().as_bytes())
+        } else {
+            None
+        };
+        let keyfile_slice = keyfile_bytes.as_ref().map(|k| &k[..]);
+        let secret = match options::assemble_secret(
+            self.password.text().as_bytes(),
+            confirm,
+            keyfile_slice,
+            self.keyfile_only,
+        ) {
+            Ok(s) => s,
+            Err(msg) => {
+                self.fail_field(msg);
+                return;
+            }
+        };
+
+        let op = match self.mode {
+            Mode::Encrypt => {
+                let name = if self.name {
+                    match basename(self.input.text()) {
+                        Some(b) => Some(b),
+                        None => {
+                            self.fail_field("cannot determine a basename for --name");
+                            return;
+                        }
+                    }
+                } else {
+                    None
+                };
+                match options::build_encrypt_options(
+                    self.cipher,
+                    self.kdf,
+                    &self.knobs(),
+                    self.armor,
+                    name.as_deref(),
+                ) {
+                    Ok(opts) => worker::Op::Encrypt(opts),
+                    Err(msg) => {
+                        self.fail_field(msg);
+                        return;
+                    }
+                }
+            }
+            Mode::Decrypt => worker::Op::Decrypt,
+            Mode::Verify => worker::Op::Verify,
+            Mode::Info => return,
+        };
+
+        let sink = if self.mode.has_output() {
+            let target = self.output.text().to_owned();
+            if target.is_empty() {
+                self.fail_field("output path is required");
+                return;
+            }
+            let target_path = Path::new(&target);
+            if common::is_stdio(target_path) {
+                self.fail_field("'-' (stdout) is not available in the TUI");
+                return;
+            }
+            match common::open_output(target_path, self.overwrite, Some(&input)) {
+                Ok(sink) => Some(sink),
+                Err(e) => {
+                    self.fail_field(e.to_string());
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+
+        let input_len = std::fs::metadata(&input).ok().map(|m| m.len());
+        let job = worker::Job {
+            op,
+            input,
+            sink,
+            secret,
+            input_len,
+            remove_input: self.remove_input,
+        };
+        self.field_error = None;
+        self.status = RunStatus::Running {
+            done: 0,
+            total: input_len,
+        };
+        self.run = Some(worker::Run::spawn(job));
+    }
+
+    /// Drain worker progress each tick; on completion, join and set the status.
+    pub fn pump(&mut self) {
+        let msgs = match &self.run {
+            Some(run) => run.drain(),
+            None => return,
+        };
+        let mut finished = None;
+        for msg in msgs {
+            match msg {
+                worker::Msg::Progress { done, total } => {
+                    self.status = RunStatus::Running { done, total };
+                }
+                worker::Msg::Finished(result) => finished = Some(result),
+            }
+        }
+        if let Some(result) = finished {
+            if let Some(run) = self.run.take() {
+                run.join();
+            }
+            match result {
+                Ok(()) => {
+                    self.status = RunStatus::Done(self.success_message());
+                    self.last_exit = 0;
+                }
+                Err(e) if is_canceled(&e) => {
+                    self.status = RunStatus::Canceled;
+                    self.last_exit = 0;
+                }
+                Err(e) => {
+                    self.last_exit = e.exit_code();
+                    self.status = RunStatus::Failed(e.to_string());
+                }
+            }
+        }
+    }
+
+    /// Ask a running operation to cancel at its next checkpoint.
+    pub fn request_cancel(&self) {
+        if let Some(run) = &self.run {
+            run.request_cancel();
+        }
+    }
+
+    /// On quit, cancel and join any in-flight worker (its temp output is
+    /// removed), setting exit 130 for a Ctrl-C that interrupts a running op.
+    pub fn shutdown(&mut self) {
+        if let Some(run) = self.run.take() {
+            run.request_cancel();
+            run.join();
+            self.last_exit = common::EXIT_CANCELED;
+        }
+    }
+
+    fn success_message(&self) -> String {
+        match self.mode {
+            Mode::Encrypt => format!("encrypted \u{2192} {}", self.output.text()),
+            Mode::Decrypt => format!("decrypted \u{2192} {}", self.output.text()),
+            Mode::Verify => "integrity verified".to_string(),
+            Mode::Info => "inspected".to_string(),
+        }
+    }
+
     /// Validate the input path (surfacing an inline error) and, unless the user
     /// has edited the output field, prefill it. Encrypt uses the pure default;
     /// Decrypt inspects the header for any stored name.
@@ -517,6 +752,11 @@ fn validate_input(s: &str) -> Result<PathBuf, String> {
     }
     common::require_regular_file(&path).map_err(|e| e.to_string())?;
     Ok(path)
+}
+
+/// A user-acknowledged cancellation is a non-error state (not a failure).
+fn is_canceled(e: &common::AppError) -> bool {
+    matches!(e, common::AppError::Core(core::SymError::Canceled))
 }
 
 #[cfg(test)]
@@ -683,5 +923,114 @@ mod tests {
         app.output.set_text("custom.out");
         app.sync_paths();
         assert_eq!(app.output.text(), "custom.out");
+    }
+
+    fn path_str(p: &Path) -> String {
+        p.to_string_lossy().into_owned()
+    }
+
+    /// Drive `pump` until the worker finishes (operations here are tiny).
+    fn pump_until_idle(app: &mut App) {
+        for _ in 0..1_000_000 {
+            app.pump();
+            if !app.is_running() {
+                return;
+            }
+            std::thread::yield_now();
+        }
+        panic!("worker did not finish");
+    }
+
+    /// Write a small encrypted file with a cheap KDF, bypassing the worker.
+    fn write_encrypted(path: &Path, plaintext: &[u8], password: &[u8]) {
+        let secret = core::Secret::new(password, None).unwrap();
+        let opts = core::EncryptOptions {
+            kdf: KdfId::Pbkdf2,
+            kdf_params: core::KdfParams::Pbkdf2 { iterations: 10_000 },
+            ..core::EncryptOptions::default()
+        };
+        let mut out = Vec::new();
+        let mut cb = |_p: core::Progress| std::ops::ControlFlow::Continue(());
+        core::encrypt(
+            plaintext,
+            &mut out,
+            &secret,
+            &opts,
+            Some(plaintext.len() as u64),
+            &mut cb,
+        )
+        .unwrap();
+        std::fs::write(path, out).unwrap();
+    }
+
+    #[test]
+    fn worker_encrypt_then_decrypt_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("plain.txt");
+        std::fs::write(&input, b"top secret bytes").unwrap();
+        let enc = dir.path().join("plain.enc");
+
+        let mut app = App::new(Some(path_str(&input)));
+        app.kdf = KdfId::Pbkdf2; // cheap KDF for a fast test
+        app.pbkdf2_iterations.set_text("10000");
+        app.output.set_text(path_str(&enc));
+        app.output_dirty = true;
+        app.password.set_text("hunter2");
+        app.confirm.set_text("hunter2");
+        app.start_run();
+        pump_until_idle(&mut app);
+        assert!(matches!(app.status, RunStatus::Done(_)), "{:?}", app.status);
+        assert!(enc.exists());
+
+        let dec = dir.path().join("plain.dec");
+        let mut app2 = App::new(Some(path_str(&enc)));
+        app2.next_mode(); // -> Decrypt
+        assert_eq!(app2.mode, Mode::Decrypt);
+        app2.output.set_text(path_str(&dec));
+        app2.output_dirty = true;
+        app2.password.set_text("hunter2");
+        app2.start_run();
+        pump_until_idle(&mut app2);
+        assert!(
+            matches!(app2.status, RunStatus::Done(_)),
+            "{:?}",
+            app2.status
+        );
+        assert_eq!(std::fs::read(&dec).unwrap(), b"top secret bytes");
+    }
+
+    #[test]
+    fn worker_wrong_password_reports_auth_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let enc = dir.path().join("c.enc");
+        write_encrypted(&enc, b"data", b"right");
+
+        let mut app = App::new(Some(path_str(&enc)));
+        app.next_mode(); // -> Decrypt
+        app.output.set_text(path_str(&dir.path().join("out")));
+        app.output_dirty = true;
+        app.password.set_text("wrong");
+        app.start_run();
+        pump_until_idle(&mut app);
+        assert!(
+            matches!(app.status, RunStatus::Failed(_)),
+            "{:?}",
+            app.status
+        );
+        assert_eq!(app.last_exit, 3); // auth failure
+    }
+
+    #[test]
+    fn info_mode_inline_inspect_populates_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let enc = dir.path().join("c.enc");
+        write_encrypted(&enc, b"data", b"pw");
+
+        let mut app = App::new(Some(path_str(&enc)));
+        app.mode = Mode::Info;
+        app.start_run(); // inline; no worker thread
+        assert!(!app.is_running());
+        assert_eq!(app.info_lines.len(), 12);
+        assert!(matches!(app.status, RunStatus::Done(_)));
     }
 }
