@@ -253,14 +253,36 @@ impl AppModel {
         let file = std::fs::File::open(path).map_err(|_| ())?;
         inspect(std::io::BufReader::new(file)).map_err(|_| ())
     }
+
+    /// Refresh the Info header pane to match the current input. In Info mode
+    /// with an input set, inspect it inline and render the header (toasting on
+    /// error); otherwise clear any stale header text. A no-op outside Info so
+    /// the pane is never populated for the crypto modes.
+    fn refresh_info(&mut self) {
+        if self.mode != Mode::Info {
+            return;
+        }
+        match self.input.clone() {
+            Some(input) => match Self::open_and_inspect(&input) {
+                Ok(header) => self.info_text = Some(info::header_text(&header)),
+                Err(e) => {
+                    self.info_text = None;
+                    self.toast(&message::user_message(&e));
+                }
+            },
+            None => self.info_text = None,
+        }
+    }
 }
 
-/// Open a modal file chooser transient for `parent`, forwarding the chosen
-/// path back through `sender` as `to_msg(path)`. Cancellation is ignored (no
-/// path is set). Uses `FileChooserNative` so no `gtk4/v4_10` feature is needed.
+/// Open a modern [`gtk::FileDialog`] (GTK 4.10+) transient for `parent`,
+/// forwarding the chosen path back through `sender` as `to_msg(path)`.
+/// Cancellation (or any selection error) is silently ignored — no path is set
+/// and no toast is shown.
 ///
-/// `save` selects a Save action (a writable target with an editable name) for
-/// output paths; otherwise an Open action picks an existing file.
+/// `save` picks the Save variant (a writable target with an editable name) for
+/// output paths; otherwise the Open variant picks an existing file. The async
+/// callback owns its `sender`; GTK keeps the dialog alive until it resolves.
 fn pick_file<F>(
     parent: &adw::ApplicationWindow,
     sender: &ComponentSender<AppModel>,
@@ -270,30 +292,19 @@ fn pick_file<F>(
 ) where
     F: Fn(PathBuf) -> AppInput + 'static,
 {
-    let action = if save {
-        gtk::FileChooserAction::Save
-    } else {
-        gtk::FileChooserAction::Open
-    };
-    let chooser = gtk::FileChooserNative::builder()
-        .title(title)
-        .action(action)
-        .modal(true)
-        .transient_for(parent)
-        .build();
+    let dialog = gtk::FileDialog::builder().title(title).modal(true).build();
     let sender = sender.clone();
-    // Use the handler's `&Self` argument (not a captured clone) so there is no
-    // reference cycle; GTK keeps the native dialog alive while it is shown and
-    // releases it once it responds.
-    chooser.connect_response(move |chooser, response| {
-        if response == gtk::ResponseType::Accept {
-            if let Some(path) = chooser.file().and_then(|f| f.path()) {
-                sender.input(to_msg(path));
-            }
+    let on_result = move |result: Result<gtk::gio::File, gtk::glib::Error>| {
+        // Ignore the user-cancel error; only act on a real path.
+        if let Ok(Some(path)) = result.map(|f| f.path()) {
+            sender.input(to_msg(path));
         }
-        chooser.destroy();
-    });
-    chooser.show();
+    };
+    if save {
+        dialog.save(Some(parent), gtk::gio::Cancellable::NONE, on_result);
+    } else {
+        dialog.open(Some(parent), gtk::gio::Cancellable::NONE, on_result);
+    }
 }
 
 #[relm4::component(pub)]
@@ -306,6 +317,7 @@ impl Component for AppModel {
     view! {
         adw::ApplicationWindow {
             set_title: Some("symcrypt"),
+            set_icon_name: Some(crate::APP_ID),
             set_default_width: 560,
             set_default_height: 620,
 
@@ -380,6 +392,7 @@ impl Component for AppModel {
                                             set_title: "Input file",
                                             #[watch]
                                             set_subtitle: &model.input_text(),
+                                            #[name = "input_browse_button"]
                                             add_suffix = &gtk::Button {
                                                 set_label: "Browse…",
                                                 set_valign: gtk::Align::Center,
@@ -722,6 +735,10 @@ impl Component for AppModel {
             }
         });
 
+        // Land keyboard focus on the input browse button so the form is usable
+        // without reaching for the mouse first.
+        widgets.input_browse_button.grab_focus();
+
         ComponentParts { model, widgets }
     }
 
@@ -729,8 +746,10 @@ impl Component for AppModel {
         match msg {
             AppInput::SetMode(mode) => {
                 self.mode = mode;
-                // Re-prefill when entering a file-producing mode.
+                // Re-prefill when entering a file-producing mode, and auto-inspect
+                // when entering Info so the header pane is populated immediately.
                 self.refresh_output();
+                self.refresh_info();
             }
             AppInput::BrowseInput => {
                 pick_file(
@@ -745,6 +764,9 @@ impl Component for AppModel {
                 self.input = Some(path);
                 self.output_edited = false;
                 self.refresh_output();
+                // Refresh the Info pane so it never shows stale header data when
+                // the input changes (a no-op outside Info mode).
+                self.refresh_info();
             }
             AppInput::BrowseOutput => {
                 pick_file(root, &sender, "Select output file", true, |p| {
@@ -1033,15 +1055,15 @@ impl AppModel {
 
     /// Pop an overwrite-confirm dialog for an existing output. On confirm,
     /// approve the overwrite and re-run; on cancel, stay idle. Uses
-    /// `adw::MessageDialog` (the only dialog the enabled `v1_4` feature gives).
+    /// `adw::AlertDialog` (libadwaita 1.5+); it presents over `root` and closes
+    /// itself once a response fires.
     fn confirm_overwrite(
         &self,
         root: &<Self as Component>::Root,
         sender: &ComponentSender<Self>,
         path: &Path,
     ) {
-        let dialog = adw::MessageDialog::new(
-            Some(root),
+        let dialog = adw::AlertDialog::new(
             Some("Overwrite file?"),
             Some(&format!("{} already exists.", path.display())),
         );
@@ -1051,14 +1073,14 @@ impl AppModel {
         dialog.set_default_response(Some("cancel"));
         dialog.set_close_response("cancel");
         let sender = sender.clone();
-        dialog.connect_response(None, move |dialog, response| {
+        dialog.connect_response(None, move |_dialog, response| {
             if response == "overwrite" {
                 sender.input(AppInput::ToggleOverwrite(true));
                 sender.input(AppInput::Run);
             }
-            dialog.destroy();
+            // `AlertDialog` closes itself once a response is chosen.
         });
-        dialog.present();
+        dialog.present(Some(root));
     }
 
     /// Apply a single KDF knob value to the model.
