@@ -94,7 +94,8 @@ pub struct Cli {
     #[arg(long, value_name = "N")]
     pub pbkdf2_iterations: Option<u32>,
 
-    /// Write ASCII-armored (base64) output. (Decrypt/verify/info auto-detect.)
+    /// Write ASCII-armored (base64) output; recommended when stdout is a
+    /// terminal. (Decrypt/verify/info auto-detect armor.)
     #[arg(short = 'a', long)]
     pub armor: bool,
     /// Store the input's basename in the header (off by default; sensitive).

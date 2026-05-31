@@ -411,5 +411,5 @@ After code changes: `cargo fmt`, `cargo clippy --all-targets --all-features`
 - [x] **Step 8** — encrypt / decrypt / verify handlers wired to core.
 - [x] **Step 9** — `info.rs` exact stable `--info` output.
 - [x] **Step 10** — `assert_cmd` integration suite (§8); `fmt` + `clippy` clean.
-- [ ] **Step 11** — `--help` text, `symcrypt(1)` man page, `cargo install`, README CLI section.
-- [ ] DESIGN §9 updated: add `ctrlc` (cli); add `cli` to `zeroize`; drop `cli` from `anyhow`.
+- [x] **Step 11** — `--help` text, `symcrypt(1)` man page, `cargo install`, README CLI section.
+- [x] DESIGN §9 updated: add `ctrlc` (cli); add `cli` to `zeroize`; drop `cli` from `anyhow`.

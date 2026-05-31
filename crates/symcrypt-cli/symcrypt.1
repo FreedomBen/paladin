@@ -1,0 +1,228 @@
+.TH SYMCRYPT 1 "2026-05-31" "symcrypt 0.1.0" "User Commands"
+.SH NAME
+symcrypt \- simple, safe symmetric file encryption
+.SH SYNOPSIS
+.B symcrypt
+.RB ( \-e | \-\-encrypt " | " \-d | \-\-decrypt " | " \-i | \-\-info " | " \-\-verify )
+.IR FILE " [" OPTIONS ]
+.SH DESCRIPTION
+.B symcrypt
+encrypts and decrypts files with authenticated symmetric encryption. An
+encrypted container begins with a self-describing, authenticated header, so a
+file can be decrypted with only the password or keyfile \(em no out-of-band
+parameters. The default cipher is AES-256-GCM and the default key-derivation
+function is Argon2id.
+.PP
+Exactly one mode and one
+.I FILE
+are required (except with
+.B \-\-help
+or
+.BR \-\-version ).
+A
+.I FILE
+of
+.B \-
+means standard input.
+.SH MODES
+.TP
+.BR \-e ", " \-\-encrypt
+Encrypt
+.I FILE
+to an output container.
+.TP
+.BR \-d ", " \-\-decrypt
+Decrypt
+.IR FILE .
+.TP
+.BR \-i ", " \-\-info
+Print unauthenticated header metadata (cipher, KDF and parameters, version,
+flags, chunk size, and a stored filename when present and well-formed) to
+standard output. No password is read.
+.TP
+.B \-\-verify
+Decrypt and discard the output to verify integrity and the secret. Nothing is
+written; exit status 0 means valid.
+.SH OPTIONS
+.TP
+.BI \-o " FILE" "\fR, \fP" \-\-output " FILE"
+Output path;
+.B \-
+means standard output. Defaults are described under OUTPUT DEFAULTS. Applies to
+encrypt and decrypt only.
+.TP
+.BI \-p " PW" "\fR, \fP" \-\-password " PW"
+Password supplied inline.
+.B Discouraged:
+it leaks to process listings and shell history. Prefer an interactive prompt,
+.BR \-\-password\-file ,
+or
+.BR \-\-password\-env .
+.TP
+.BI \-\-password\-file " FILE"
+Read the password from a file. Exactly one trailing LF or CRLF is trimmed.
+.TP
+.BI \-\-password\-env " VAR"
+Read the password from the environment variable
+.IR VAR .
+.TP
+.B \-\-no\-password
+Use an empty password (keyfile-only mode). Valid only together with
+.BR \-k .
+.TP
+.BI \-k " FILE" "\fR, \fP" \-\-keyfile " FILE"
+Keyfile material combined with the password source.
+.B \-
+is rejected. The keyfile must be a regular file of 1 byte to 1 MiB.
+.TP
+.BI \-c " NAME" "\fR, \fP" \-\-cipher " NAME"
+Cipher:
+.B aes\-256\-gcm
+(default) or
+.BR chacha20\-poly1305 .
+Encrypt only.
+.TP
+.BI \-\-kdf " NAME"
+Key-derivation function:
+.B argon2id
+(default),
+.BR scrypt ,
+or
+.BR pbkdf2 .
+Encrypt only.
+.TP
+.BI \-\-argon2\-memory " KiB" "\fR, \fP" \-\-argon2\-time " N" "\fR, \fP" \-\-argon2\-parallelism " N"
+Argon2id cost parameters. Require
+.B \-\-kdf argon2id
+or the default KDF.
+.TP
+.BI \-\-scrypt\-log\-n " N" "\fR, \fP" \-\-scrypt\-r " N" "\fR, \fP" \-\-scrypt\-p " N"
+scrypt cost parameters. Require
+.BR "\-\-kdf scrypt" .
+.TP
+.BI \-\-pbkdf2\-iterations " N"
+PBKDF2-HMAC-SHA256 iteration count. Requires
+.BR "\-\-kdf pbkdf2" .
+.TP
+.BR \-a ", " \-\-armor
+Write ASCII-armored (base64) output; recommended when standard output is a
+terminal. Decrypt, verify, and info auto-detect armor. Encrypt only.
+.TP
+.B \-\-name
+Store the input's basename in the header (off by default; sensitive). Rejected
+with stdin input. Encrypt only.
+.TP
+.BR \-f ", " \-\-force
+Overwrite an existing output file. By default an existing output is refused.
+Applies to encrypt and decrypt.
+.TP
+.B \-\-remove
+After a successful operation, best-effort delete the input. This is a plain
+delete with no secure erase. Rejected with stdin input. Applies to encrypt and
+decrypt.
+.TP
+.BR \-\-progress ", " \-\-no\-progress
+Force the progress bar on or off. The default is automatic: on when standard
+error is a terminal.
+.TP
+.BR \-v ", " \-\-verbose
+Print additional, secret-free diagnostics to standard error.
+.TP
+.BR \-q ", " \-\-quiet
+Suppress progress and status output. Does not suppress primary stdout (such as
+.BR \-\-info )
+or errors. Mutually exclusive with
+.BR \-\-verbose .
+.TP
+.BR \-h ", " \-\-help
+Print help.
+.TP
+.BR \-V ", " \-\-version
+Print version.
+.SH PASSWORD INPUT
+For modes that need a secret, at most one of
+.BR \-p ,
+.BR \-\-password\-file ,
+.BR \-\-password\-env ,
+or
+.B \-\-no\-password
+may be given. If none is given, symcrypt prompts interactively with no echo; on
+encrypt the prompt is asked twice and must match. A keyfile, if supplied, is
+always combined with the password source. The resolved secret must contain at
+least one byte; an empty password is accepted only via
+.BR \-\-no\-password .
+Password text is used as UTF-8 bytes with no normalization.
+.SH OUTPUT DEFAULTS
+Without
+.BR \-o :
+encrypt writes
+.IR FILE .symcrypt
+(or
+.IR FILE .symcrypt.asc
+with
+.BR \-\-armor );
+decrypt uses the stored filename when present and well-formed, otherwise strips
+a recognized
+.IR .symcrypt.asc ", " .symcrypt ", or " .asc
+suffix, otherwise appends
+.IR .dec .
+Stdin encrypt and decrypt require
+.BR \-o .
+File outputs are written to a sibling temporary file (mode 0600 on Unix) and
+renamed into place only after success; a failed run leaves no partial output.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+General or I/O error.
+.TP
+.B 2
+Usage or argument error.
+.TP
+.B 3
+Authentication failure (wrong password/keyfile or a corrupted/tampered file).
+.TP
+.B 4
+Unsupported, unknown, or malformed format or header.
+.TP
+.B 130
+Canceled by the user (SIGINT).
+.SH EXAMPLES
+.PP
+Encrypt a file, prompting for a password:
+.PP
+.RS
+.EX
+symcrypt \-e report.pdf
+.EE
+.RE
+.PP
+Armored output to standard output:
+.PP
+.RS
+.EX
+symcrypt \-e report.pdf \-o \- \-\-armor > out.asc
+.EE
+.RE
+.PP
+Decrypt, restoring the stored or derived name:
+.PP
+.RS
+.EX
+symcrypt \-d report.pdf.symcrypt
+.EE
+.RE
+.PP
+Keyfile-only encryption:
+.PP
+.RS
+.EX
+symcrypt \-e vault.tar \-k usb.key \-\-no\-password
+.EE
+.RE
+.SH SEE ALSO
+The project specification in
+.B DESIGN.md
+(section 6 for the command-line interface).

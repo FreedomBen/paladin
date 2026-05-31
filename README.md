@@ -7,10 +7,10 @@ so they can be identified and decrypted with only the password (or keyfile) — 
 out-of-band parameters.
 
 > **Project status.** The shared libraries — `symcrypt-core` (all crypto, file
-> format, streaming, helpers) and `symcrypt-common` (terminal glue) — are
-> implemented and tested. The three front-end binaries (`symcrypt`,
-> `symcrypt-tui`, `symcrypt-gtk`) are currently scaffold stubs; they are built
-> out in `IMPLEMENTATION_PLAN_02_CLI.md`, `_03_TUI.md`, and `_04_GTK.md`.
+> format, streaming, helpers) and `symcrypt-common` (terminal glue) — and the
+> `symcrypt` command-line front-end are implemented and tested. The
+> `symcrypt-tui` and `symcrypt-gtk` binaries remain scaffold stubs; they are
+> built out in `IMPLEMENTATION_PLAN_03_TUI.md` and `_04_GTK.md`.
 > [`DESIGN.md`](DESIGN.md) is the authoritative specification.
 
 ## Highlights
@@ -36,7 +36,7 @@ the result.
 | ----------------- | ------------------ | ---------------------------------------------------------------------------------------------- |
 | `symcrypt-core`   | lib                | All crypto, KDF, file format/header, STREAM chunking, ASCII armor, and pure helpers.            |
 | `symcrypt-common` | lib                | Terminal glue shared by the CLI + TUI: path-or-stdin I/O, clobber check, secure remove, password resolution, exit-code mapping. |
-| `symcrypt-cli`    | bin `symcrypt`     | clap argument parsing; password resolution; calls the core. *(stub)*                            |
+| `symcrypt-cli`    | bin `symcrypt`     | clap argument parsing; password resolution; calls the core.                                     |
 | `symcrypt-tui`    | bin `symcrypt-tui` | ratatui + crossterm interactive form. *(stub)*                                                  |
 | `symcrypt-gtk`    | bin `symcrypt-gtk` | relm4 (gtk4-rs) + libadwaita desktop app. *(stub)*                                              |
 
@@ -64,7 +64,38 @@ generic `Read`/`Write` and reports progress through a callback.
 
 The CLI lives in package **`symcrypt-cli`** but produces a binary named
 **`symcrypt`** — use `-p symcrypt-cli` (or `--bin symcrypt`) to run it. The
-front-end binaries currently print a "not yet implemented" message and exit `2`.
+`symcrypt-tui` and `symcrypt-gtk` binaries currently print a "not yet
+implemented" message and exit `2`.
+
+## Command-line usage
+
+Install the `symcrypt` binary with Cargo:
+
+```sh
+cargo install --path crates/symcrypt-cli
+```
+
+`symcrypt` takes exactly one mode (`-e`/`-d`/`-i`/`--verify`) and one `<FILE>`
+(`-` means stdin). With no password source it prompts interactively (no echo);
+non-interactively, supply `-p`, `--password-file`, `--password-env`, and/or a
+keyfile (`-k`). See `symcrypt --help` for every option and
+[`DESIGN.md`](DESIGN.md) §6 for the full specification.
+
+```sh
+symcrypt -e report.pdf                      # → report.pdf.symcrypt (prompts for a password)
+symcrypt -e report.pdf -o - --armor > out   # armored, written to stdout
+symcrypt -d report.pdf.symcrypt             # → report.pdf (or the stored/derived name)
+symcrypt -i report.pdf.symcrypt             # print unauthenticated header metadata
+symcrypt --verify report.pdf.symcrypt       # check integrity + password, writing nothing
+printf 'secret' | PW=passphrase symcrypt -e - -o s.symcrypt --password-env PW
+symcrypt -e vault.tar -k usb.key --no-password   # keyfile-only
+symcrypt -e big.iso -c chacha20-poly1305 --remove
+```
+
+Existing output files are refused unless `-f/--force` is given; on Unix the
+output is created with mode `0600`. Exit codes: `0` success, `1` I/O or general
+error, `2` usage error, `3` authentication failure, `4` unsupported or invalid
+format, `130` canceled.
 
 ## Library usage
 
