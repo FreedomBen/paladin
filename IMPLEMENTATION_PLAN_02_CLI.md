@@ -407,7 +407,7 @@ After code changes: `cargo fmt`, `cargo clippy --all-targets --all-features`
 - [x] **Step 4** — `options.rs` cipher/KDF parse + `KdfParams` assembly + `--name` basename + armor.
 - [x] **Step 5** — `secret.rs` non-interactive resolution + interactive prompt/confirm → `Secret`.
 - [ ] **Step 6** — `run.rs` input/output paths, decrypt-needs-`inspect` sequencing, `OutputSink` finalize, `--remove`.
-- [ ] **Step 7** — `progress.rs` indicatif bar + `ctrlc` cancel flag + `OnProgress` closure.
+- [x] **Step 7** — `progress.rs` indicatif bar + `ctrlc` cancel flag + `OnProgress` closure.
 - [ ] **Step 8** — encrypt / decrypt / verify handlers wired to core.
 - [ ] **Step 9** — `info.rs` exact stable `--info` output.
 - [ ] **Step 10** — `assert_cmd` integration suite (§8); `fmt` + `clippy` clean.

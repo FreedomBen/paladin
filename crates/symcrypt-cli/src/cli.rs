@@ -135,4 +135,16 @@ impl Cli {
             Mode::Verify
         }
     }
+
+    /// Tri-state progress preference: `Some(true|false)` when forced by
+    /// `--progress`/`--no-progress`, else `None` for auto (stderr-TTY) detection.
+    pub fn progress_pref(&self) -> Option<bool> {
+        if self.progress {
+            Some(true)
+        } else if self.no_progress {
+            Some(false)
+        } else {
+            None
+        }
+    }
 }
