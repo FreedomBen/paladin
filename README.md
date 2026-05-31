@@ -55,7 +55,8 @@ the `symcrypt-gtk` desktop app needs the GTK4 + libadwaita development packages.
 
 symcrypt targets a **minimum supported Rust version (MSRV) of 1.94** (edition
 2021); no `rust-toolchain.toml` is pinned, so current stable works. The easiest
-way to get it is [`rustup`](https://rustup.rs):
+way to get it is [`rustup`](https://rustup.rs), the official Rust toolchain
+installer and version manager:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -63,8 +64,34 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustc --version               # confirm it reports 1.94 or newer
 ```
 
-A Rust toolchain from your distribution's packages works too, as long as it is
-at least 1.94.
+The installer is interactive; pressing Enter to accept the defaults is fine
+(append `-s -- -y` to the piped `sh` for an unattended install). It installs the
+default `stable` toolchain — `cargo`, `clippy`, and `rustfmt` included — and adds
+`~/.cargo/bin` to your `PATH`, so the `cargo`, `make lint`, and `make fmt`
+workflows below work out of the box. A Rust toolchain from your distribution's
+packages works too, as long as it is at least 1.94.
+
+#### Managing the toolchain with rustup
+
+Once installed, `rustup` is how you keep Rust current and manage toolchains and
+components. The commands you are most likely to need for this project:
+
+| Command                               | What it does                                      |
+| ------------------------------------- | ------------------------------------------------- |
+| `rustup show`                         | Show the active toolchain and its versions        |
+| `rustup update`                       | Update all installed toolchains and rustup itself |
+| `rustup toolchain list`               | List the installed toolchains                     |
+| `rustup toolchain install stable`     | Install or reinstall the stable toolchain         |
+| `rustup default stable`               | Set stable as the default toolchain               |
+| `rustup component add clippy rustfmt` | Add the clippy and rustfmt components             |
+| `rustup override set stable`          | Pin the current directory to a toolchain          |
+| `rustup doc`                          | Open the offline Rust documentation               |
+| `rustup self uninstall`               | Remove rustup and every toolchain it installed    |
+
+Run `rustup help` (or `rustup help <subcommand>`) for the full reference, and
+`rustup update` from time to time to stay on the latest stable release. If you
+chose the minimal profile at install time, add the lint and format tools with
+`rustup component add clippy rustfmt` before running `make lint` / `make fmt`.
 
 ### 2. Install system dependencies (GTK app only)
 
