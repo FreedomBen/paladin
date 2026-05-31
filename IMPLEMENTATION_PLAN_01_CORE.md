@@ -79,9 +79,12 @@ dependencies arrive in plans `02`–`04`. Do **not** add front-end deps
   `lib.rs`; `crates/symcrypt-common/src/lib.rs`; placeholder `main.rs` for the
   three front-ends).
 - Add core deps via `cargo add` (pins land in `Cargo.lock`, §9): `aes-gcm`,
-  `chacha20poly1305`, `argon2`, `scrypt`, `pbkdf2`, `sha2`, `rand`, `getrandom`,
-  `rand_core`, `zeroize` (with `derive`), `base64`, `thiserror`; dev-dep
-  `tempfile` and `hex` (KAT fixtures).
+  `chacha20poly1305`, `argon2`, `scrypt`, `pbkdf2`, `sha2`, `getrandom`,
+  `zeroize` (with `derive`), `base64`, `thiserror`; dev-dep
+  `tempfile` and `hex` (KAT fixtures). (As built, salt/nonce-prefix entropy
+  comes straight from `getrandom::fill`, so the `rand`/`rand_core` wrappers are
+  not added as direct deps — `rand` is absent from the tree, `rand_core` is only
+  pulled transitively by the KDF crates.)
 - `symcrypt-common` deps: path `symcrypt-core`, `thiserror`; dev-dep `tempfile`.
 - Confirm `cargo build` + `cargo test` succeed on the empty workspace.
 
