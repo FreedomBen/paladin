@@ -45,32 +45,117 @@ The core never reads argv, never prompts, never touches the filesystem on its
 own, never decides whether to overwrite, and never exits the process. It takes
 generic `Read`/`Write` and reports progress through a callback.
 
-## Requirements
+## Building from source
 
-- **Rust 1.94+** (Cargo workspace).
-- Building the GTK app additionally needs the **GTK4 + libadwaita** development
-  libraries — Fedora: `gtk4-devel libadwaita-devel`; Debian/Ubuntu:
-  `libgtk-4-dev libadwaita-1-dev`.
+`symcrypt` builds with a standard Rust toolchain and Cargo. The `symcrypt` CLI
+and `symcrypt-tui` terminal app are pure Rust and need no system libraries — only
+the `symcrypt-gtk` desktop app needs the GTK4 + libadwaita development packages.
 
-## Build and test
+### 1. Install the Rust toolchain
 
-| Task                      | Command                                            |
-| ------------------------- | -------------------------------------------------- |
-| Build everything (debug)  | `cargo build`                                      |
-| Build release             | `cargo build --release`                            |
-| Test the whole workspace  | `cargo test`                                       |
-| Test one crate            | `cargo test -p symcrypt-core`                      |
-| Run a single test by name | `cargo test -p symcrypt-core round_trip`           |
-| Lint                      | `cargo clippy --all-targets --all-features`        |
-| Format                    | `cargo fmt` (check only: `cargo fmt --check`)      |
+symcrypt targets a **minimum supported Rust version (MSRV) of 1.94** (edition
+2021); no `rust-toolchain.toml` is pinned, so current stable works. The easiest
+way to get it is [`rustup`](https://rustup.rs):
 
-A `Makefile` wraps these for convenience: `make build`, `make release`,
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+. "$HOME/.cargo/env"          # add ~/.cargo/bin to PATH (or restart your shell)
+rustc --version               # confirm it reports 1.94 or newer
+```
+
+A Rust toolchain from your distribution's packages works too, as long as it is
+at least 1.94.
+
+### 2. Install system dependencies (GTK app only)
+
+Skip this step unless you are building `symcrypt-gtk`. The desktop app links
+against **GTK4** and **libadwaita**, so it needs their development packages plus
+a C compiler and `pkg-config` to locate them:
+
+- **Fedora / RHEL:** `sudo dnf install gtk4-devel libadwaita-devel gcc pkg-config`
+- **Debian / Ubuntu:** `sudo apt install libgtk-4-dev libadwaita-1-dev build-essential pkg-config`
+- **Arch Linux:** `sudo pacman -S gtk4 libadwaita base-devel`
+- **macOS (Homebrew):** `brew install gtk4 libadwaita pkg-config`
+
+On macOS you also need the Xcode Command Line Tools (`xcode-select --install`)
+for the C compiler and linker.
+
+### 3. Get the source
+
+```sh
+git clone https://github.com/FreedomBen/symcrypt.git
+cd symcrypt
+```
+
+### 4. Build
+
+```sh
+cargo build                   # debug build of the whole workspace
+cargo build --release         # optimized build → target/release/
+```
+
+Build a single front-end with `-p`. Note the CLI package is **`symcrypt-cli`**
+but its binary is named **`symcrypt`**:
+
+```sh
+cargo build -p symcrypt-cli   # CLI only      (binary: symcrypt)
+cargo build -p symcrypt-tui   # terminal app only
+cargo build -p symcrypt-gtk   # desktop app only (needs the deps from step 2)
+```
+
+### 5. Run the tests
+
+Confirm the build with the workspace test suite:
+
+```sh
+cargo test                               # the whole workspace
+cargo test -p symcrypt-core              # one crate
+cargo test -p symcrypt-core round_trip   # a single test by name (substring match)
+```
+
+### 6. Build, test, and lint commands
+
+| Task                      | Command                                       |
+| ------------------------- | --------------------------------------------- |
+| Build everything (debug)  | `cargo build`                                 |
+| Build release             | `cargo build --release`                       |
+| Test the whole workspace  | `cargo test`                                  |
+| Test one crate            | `cargo test -p symcrypt-core`                 |
+| Run a single test by name | `cargo test -p symcrypt-core round_trip`      |
+| Lint                      | `cargo clippy --all-targets --all-features`   |
+| Format                    | `cargo fmt` (check only: `cargo fmt --check`) |
+
+A `Makefile` wraps these for convenience — `make build`, `make release`,
 `make test`, `make lint`, `make fmt`, and `make ci` (format-check + lint +
-test). Run `make help` to list every target. It is a thin wrapper over Cargo,
-so the commands above work just as well directly.
+test). Run `make help` to list every target; it is a thin wrapper over Cargo, so
+the commands above work just as well directly.
 
-The CLI lives in package **`symcrypt-cli`** but produces a binary named
-**`symcrypt`** — use `-p symcrypt-cli` (or `--bin symcrypt`) to run it.
+### 7. Install the binaries
+
+Install any front-end into Cargo's binary directory (`~/.cargo/bin`, which
+`rustup` puts on your `PATH`):
+
+```sh
+cargo install --path crates/symcrypt-cli    # the `symcrypt` CLI
+cargo install --path crates/symcrypt-tui    # the terminal app
+cargo install --path crates/symcrypt-gtk    # the desktop app (needs step 2)
+```
+
+Or use the Makefile to install a binary **and** its packaged extras — a man page
+for the CLI/TUI, or the `.desktop` entry, icon, and AppStream metainfo for GTK —
+under a prefix (default `/usr/local`; override with `PREFIX=`, stage with
+`DESTDIR=`):
+
+```sh
+make install                       # symcrypt CLI + man page
+make install-tui                   # symcrypt-tui + man page
+make install-gtk                   # symcrypt-gtk + .desktop + icon + metainfo
+make install PREFIX="$HOME/.local"
+```
+
+The matching `make uninstall`, `make uninstall-tui`, and `make uninstall-gtk`
+targets remove them again. The per-front-end usage sections below cover each
+binary in more detail.
 
 ## Command-line usage
 
@@ -122,7 +207,7 @@ Install the `symcrypt-tui` binary with Cargo, or install the binary **and** its
 man page under a prefix with the Makefile:
 
 ```sh
-cargo install -p symcrypt-tui
+cargo install --path crates/symcrypt-tui
 make install-tui                       # → /usr/local/bin/symcrypt-tui + man page
 make install-tui PREFIX="$HOME/.local"
 ```
@@ -200,7 +285,7 @@ entry, icon, and AppStream metainfo:
 cargo run -p symcrypt-gtk                 # run from the source tree
 make run-gtk                              # same, via the Makefile
 
-cargo install -p symcrypt-gtk             # binary only
+cargo install --path crates/symcrypt-gtk  # binary only
 make install-gtk                          # binary + .desktop + icon + metainfo
 make install-gtk PREFIX="$HOME/.local"
 make uninstall-gtk                        # remove them again
