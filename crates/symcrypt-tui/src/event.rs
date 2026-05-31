@@ -57,6 +57,10 @@ fn text_key(app: &mut App, target: Focus, code: KeyCode) {
     if edited && target == Focus::Output {
         app.output_dirty = true;
     }
+    // Editing a KDF knob re-validates the options for inline feedback.
+    if edited && target.is_knob() {
+        app.validate_options();
+    }
 }
 
 /// Keys for tabs, selectors, checkboxes, and the advanced expander.
@@ -64,6 +68,10 @@ fn widget_key(app: &mut App, target: Focus, code: KeyCode) {
     match (target, code) {
         (Focus::Mode, KeyCode::Left) => app.prev_mode(),
         (Focus::Mode, KeyCode::Right) => app.next_mode(),
+        (Focus::Cipher, KeyCode::Left) => app.cycle_cipher(false),
+        (Focus::Cipher, KeyCode::Right) => app.cycle_cipher(true),
+        (Focus::Kdf, KeyCode::Left) => app.cycle_kdf(false),
+        (Focus::Kdf, KeyCode::Right) => app.cycle_kdf(true),
         // `?` opens help only off a text field (so '?' can be typed into paths).
         (_, KeyCode::Char('?')) => app.help = true,
         (Focus::Advanced, KeyCode::Enter) => app.toggle(Focus::Advanced),

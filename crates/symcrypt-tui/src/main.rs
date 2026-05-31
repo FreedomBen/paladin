@@ -6,6 +6,7 @@
 mod app;
 mod event;
 mod field;
+mod options;
 mod ui;
 
 use std::path::PathBuf;

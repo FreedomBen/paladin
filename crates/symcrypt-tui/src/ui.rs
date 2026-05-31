@@ -10,7 +10,7 @@ use ratatui::Frame;
 use crate::app::{App, Focus, Mode, RunStatus};
 
 /// Column where field values begin (after the padded label).
-const LABEL_W: u16 = 11;
+const LABEL_W: u16 = 13;
 
 /// Render the whole UI for the current frame.
 pub fn draw(f: &mut Frame, app: &App) {
@@ -120,6 +120,33 @@ fn row_content(app: &App, focus: Focus) -> (String, Option<u16>) {
                 if app.advanced { '-' } else { '+' }
             ),
             None,
+        ),
+        Focus::Cipher => (field("Cipher", &format!("< {} >", app.cipher)), None),
+        Focus::Kdf => (field("KDF", &format!("< {} >", app.kdf)), None),
+        Focus::KnobMem => (
+            field("Memory KiB", app.argon2_memory.text()),
+            caret(&app.argon2_memory),
+        ),
+        Focus::KnobTime => (
+            field("Time cost", app.argon2_time.text()),
+            caret(&app.argon2_time),
+        ),
+        Focus::KnobPar => (
+            field("Parallelism", app.argon2_parallelism.text()),
+            caret(&app.argon2_parallelism),
+        ),
+        Focus::KnobLogN => (
+            field("log2(N)", app.scrypt_log_n.text()),
+            caret(&app.scrypt_log_n),
+        ),
+        Focus::KnobR => (field("Block r", app.scrypt_r.text()), caret(&app.scrypt_r)),
+        Focus::KnobP => (
+            field("Parallel p", app.scrypt_p.text()),
+            caret(&app.scrypt_p),
+        ),
+        Focus::KnobIter => (
+            field("Iterations", app.pbkdf2_iterations.text()),
+            caret(&app.pbkdf2_iterations),
         ),
         Focus::Name => (check("Store filename in header (--name)", app.name), None),
         Focus::Armor => (check("ASCII armor (--armor)", app.armor), None),

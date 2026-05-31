@@ -1,11 +1,19 @@
 //! Application state for the symcrypt TUI. `event` mutates it; `ui` renders it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use symcrypt_common as common;
 use symcrypt_core as core;
 
+use core::{CipherId, KdfId};
+
 use crate::field::Editor;
+use crate::options::{self, KdfKnobs};
+
+/// Selectable ciphers, in display order.
+const CIPHERS: [CipherId; 2] = [CipherId::Aes256Gcm, CipherId::ChaCha20Poly1305];
+/// Selectable KDFs, in display order.
+const KDFS: [KdfId; 3] = [KdfId::Argon2id, KdfId::Scrypt, KdfId::Pbkdf2];
 
 /// The operation the user is performing; rendered as tabs.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -53,6 +61,15 @@ pub enum Focus {
     ShowPassword,
     KeyfileOnly,
     Advanced,
+    Cipher,
+    Kdf,
+    KnobMem,
+    KnobTime,
+    KnobPar,
+    KnobLogN,
+    KnobR,
+    KnobP,
+    KnobIter,
     Name,
     Armor,
     Remove,
@@ -65,7 +82,32 @@ impl Focus {
     pub fn is_text(self) -> bool {
         matches!(
             self,
-            Focus::Input | Focus::Output | Focus::Password | Focus::Confirm | Focus::Keyfile
+            Focus::Input
+                | Focus::Output
+                | Focus::Password
+                | Focus::Confirm
+                | Focus::Keyfile
+                | Focus::KnobMem
+                | Focus::KnobTime
+                | Focus::KnobPar
+                | Focus::KnobLogN
+                | Focus::KnobR
+                | Focus::KnobP
+                | Focus::KnobIter
+        )
+    }
+
+    /// Is this one of the KDF cost-knob fields?
+    pub fn is_knob(self) -> bool {
+        matches!(
+            self,
+            Focus::KnobMem
+                | Focus::KnobTime
+                | Focus::KnobPar
+                | Focus::KnobLogN
+                | Focus::KnobR
+                | Focus::KnobP
+                | Focus::KnobIter
         )
     }
 }
@@ -88,6 +130,19 @@ pub struct App {
     pub password: Editor,
     pub confirm: Editor,
     pub keyfile: Editor,
+
+    // Advanced selectors.
+    pub cipher: CipherId,
+    pub kdf: KdfId,
+
+    // KDF cost knobs (only the selected KDF's are shown).
+    pub argon2_memory: Editor,
+    pub argon2_time: Editor,
+    pub argon2_parallelism: Editor,
+    pub scrypt_log_n: Editor,
+    pub scrypt_r: Editor,
+    pub scrypt_p: Editor,
+    pub pbkdf2_iterations: Editor,
 
     // Toggles.
     pub show_password: bool,
@@ -119,6 +174,7 @@ impl App {
             Some(path) => Editor::with_text(path),
             None => Editor::new(),
         };
+        let k = KdfKnobs::defaults();
         let mut app = Self {
             mode: Mode::Encrypt,
             should_quit: false,
@@ -127,6 +183,15 @@ impl App {
             password: Editor::masked(),
             confirm: Editor::masked(),
             keyfile: Editor::new(),
+            cipher: CipherId::Aes256Gcm,
+            kdf: KdfId::Argon2id,
+            argon2_memory: Editor::with_text(k.argon2_memory_kib),
+            argon2_time: Editor::with_text(k.argon2_time_cost),
+            argon2_parallelism: Editor::with_text(k.argon2_parallelism),
+            scrypt_log_n: Editor::with_text(k.scrypt_log_n),
+            scrypt_r: Editor::with_text(k.scrypt_r),
+            scrypt_p: Editor::with_text(k.scrypt_p),
+            pbkdf2_iterations: Editor::with_text(k.pbkdf2_iterations),
             show_password: false,
             keyfile_only: false,
             advanced: false,
@@ -150,6 +215,15 @@ impl App {
         0
     }
 
+    /// The KDF knob fields visible for the currently selected KDF.
+    fn kdf_knob_focuses(&self) -> Vec<Focus> {
+        match self.kdf {
+            KdfId::Argon2id => vec![Focus::KnobMem, Focus::KnobTime, Focus::KnobPar],
+            KdfId::Scrypt => vec![Focus::KnobLogN, Focus::KnobR, Focus::KnobP],
+            KdfId::Pbkdf2 => vec![Focus::KnobIter],
+        }
+    }
+
     /// The ordered list of focusable widgets for the current state.
     pub fn ring(&self) -> Vec<Focus> {
         let mut r = vec![Focus::Mode, Focus::Input];
@@ -164,6 +238,9 @@ impl App {
                 r.push(Focus::KeyfileOnly);
                 r.push(Focus::Advanced);
                 if self.advanced {
+                    r.push(Focus::Cipher);
+                    r.push(Focus::Kdf);
+                    r.extend(self.kdf_knob_focuses());
                     r.extend([
                         Focus::Name,
                         Focus::Armor,
@@ -254,6 +331,19 @@ impl App {
         self.sync_paths();
     }
 
+    /// Cycle the cipher selector.
+    pub fn cycle_cipher(&mut self, forward: bool) {
+        self.cipher = cycle(&CIPHERS, self.cipher, forward);
+        self.validate_options();
+    }
+
+    /// Cycle the KDF selector (changing which knob fields are shown).
+    pub fn cycle_kdf(&mut self, forward: bool) {
+        self.kdf = cycle(&KDFS, self.kdf, forward);
+        self.clamp_focus();
+        self.validate_options();
+    }
+
     /// Mutable editor behind a text-field focus, if `focus` names one.
     pub fn editor_mut(&mut self, focus: Focus) -> Option<&mut Editor> {
         match focus {
@@ -262,6 +352,13 @@ impl App {
             Focus::Password => Some(&mut self.password),
             Focus::Confirm => Some(&mut self.confirm),
             Focus::Keyfile => Some(&mut self.keyfile),
+            Focus::KnobMem => Some(&mut self.argon2_memory),
+            Focus::KnobTime => Some(&mut self.argon2_time),
+            Focus::KnobPar => Some(&mut self.argon2_parallelism),
+            Focus::KnobLogN => Some(&mut self.scrypt_log_n),
+            Focus::KnobR => Some(&mut self.scrypt_r),
+            Focus::KnobP => Some(&mut self.scrypt_p),
+            Focus::KnobIter => Some(&mut self.pbkdf2_iterations),
             _ => None,
         }
     }
@@ -269,7 +366,7 @@ impl App {
     /// Toggle the checkbox / expander named by `focus`, applying side effects:
     /// showing the password unmasks both password fields; keyfile-only opens the
     /// advanced pane and clears any typed password; armor re-derives the output
-    /// extension.
+    /// extension; `--name` re-validates the options.
     pub fn toggle(&mut self, focus: Focus) {
         match focus {
             Focus::ShowPassword => {
@@ -291,7 +388,10 @@ impl App {
                 self.advanced = !self.advanced;
                 self.clamp_focus();
             }
-            Focus::Name => self.name = !self.name,
+            Focus::Name => {
+                self.name = !self.name;
+                self.validate_options();
+            }
             Focus::Armor => {
                 self.armor = !self.armor;
                 self.sync_paths();
@@ -299,6 +399,48 @@ impl App {
             Focus::Remove => self.remove_input = !self.remove_input,
             Focus::Overwrite => self.overwrite = !self.overwrite,
             _ => {}
+        }
+    }
+
+    /// Snapshot the knob editors into the pure [`KdfKnobs`] for validation.
+    pub fn knobs(&self) -> KdfKnobs {
+        KdfKnobs {
+            argon2_memory_kib: self.argon2_memory.text().to_owned(),
+            argon2_time_cost: self.argon2_time.text().to_owned(),
+            argon2_parallelism: self.argon2_parallelism.text().to_owned(),
+            scrypt_log_n: self.scrypt_log_n.text().to_owned(),
+            scrypt_r: self.scrypt_r.text().to_owned(),
+            scrypt_p: self.scrypt_p.text().to_owned(),
+            pbkdf2_iterations: self.pbkdf2_iterations.text().to_owned(),
+        }
+    }
+
+    /// Validate the encrypt options (cipher/KDF/knobs/name) for inline feedback.
+    /// No-op outside Encrypt mode. Sets `field_error` on failure, clears on pass.
+    pub fn validate_options(&mut self) {
+        if self.mode != Mode::Encrypt {
+            return;
+        }
+        let name = if self.name {
+            match basename(self.input.text()) {
+                Some(b) => Some(b),
+                None => {
+                    self.field_error = Some("cannot determine a basename for --name".to_string());
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        match options::build_encrypt_options(
+            self.cipher,
+            self.kdf,
+            &self.knobs(),
+            self.armor,
+            name.as_deref(),
+        ) {
+            Ok(_) => self.field_error = None,
+            Err(msg) => self.field_error = Some(msg),
         }
     }
 
@@ -343,6 +485,25 @@ impl Default for App {
     fn default() -> Self {
         Self::new(None)
     }
+}
+
+/// Cycle through `items` from `current`, forward or backward (wrapping).
+fn cycle<T: Copy + PartialEq>(items: &[T], current: T, forward: bool) -> T {
+    let n = items.len();
+    let i = items.iter().position(|&x| x == current).unwrap_or(0);
+    if forward {
+        items[(i + 1) % n]
+    } else {
+        items[(i + n - 1) % n]
+    }
+}
+
+/// The UTF-8 basename of a path string, if it has one.
+fn basename(path: &str) -> Option<String> {
+    Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_owned())
 }
 
 /// Validate a path destined for a path field: reject the stdio sentinel `-`
@@ -405,6 +566,17 @@ mod tests {
         app.advanced = true;
         assert!(app.ring().len() > collapsed);
         assert!(app.ring().contains(&Focus::Keyfile));
+        assert!(app.ring().contains(&Focus::Cipher));
+    }
+
+    #[test]
+    fn advanced_shows_only_selected_kdf_knobs() {
+        let mut app = App::new(None);
+        app.advanced = true;
+        assert!(app.ring().contains(&Focus::KnobMem)); // argon2 default
+        app.cycle_kdf(true); // -> scrypt
+        assert!(app.ring().contains(&Focus::KnobLogN));
+        assert!(!app.ring().contains(&Focus::KnobMem));
     }
 
     #[test]
@@ -424,6 +596,16 @@ mod tests {
         app.focus = n - 1;
         app.focus_next();
         assert_eq!(app.focus, 0);
+    }
+
+    #[test]
+    fn cycle_cipher_round_trips() {
+        let mut app = App::new(None);
+        assert_eq!(app.cipher, CipherId::Aes256Gcm);
+        app.cycle_cipher(true);
+        assert_eq!(app.cipher, CipherId::ChaCha20Poly1305);
+        app.cycle_cipher(true);
+        assert_eq!(app.cipher, CipherId::Aes256Gcm); // wraps
     }
 
     #[test]
@@ -453,7 +635,16 @@ mod tests {
     fn editor_mut_only_for_text_fields() {
         let mut app = App::new(None);
         assert!(app.editor_mut(Focus::Input).is_some());
+        assert!(app.editor_mut(Focus::KnobMem).is_some());
         assert!(app.editor_mut(Focus::Advanced).is_none());
+    }
+
+    #[test]
+    fn validate_options_flags_bad_knob() {
+        let mut app = App::new(None);
+        app.argon2_memory.set_text("1"); // below range
+        app.validate_options();
+        assert!(app.field_error.is_some());
     }
 
     #[test]
