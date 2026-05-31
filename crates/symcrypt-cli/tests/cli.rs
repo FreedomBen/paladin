@@ -343,3 +343,26 @@ fn remove_failure_warns_but_succeeds() {
     assert!(out.exists(), "output must be finalized");
     assert!(input.exists(), "input survives a failed --remove");
 }
+
+#[test]
+fn verbose_output_does_not_leak_the_password() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("in.txt");
+    fs::write(&input, b"top secret data").unwrap();
+    let out = dir.path().join("c.bin");
+    let secret = "SUPERSECRETPW12345";
+    let assert = sc()
+        .arg("-e")
+        .arg(&input)
+        .args(FAST_KDF)
+        .args(["-p", secret, "-v"])
+        .arg("-o")
+        .arg(&out)
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(
+        !stderr.contains(secret),
+        "verbose stderr must never contain the password:\n{stderr}"
+    );
+}
