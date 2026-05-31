@@ -412,10 +412,11 @@ pub(crate) fn verify<R: Read>(input: R, secret: &Secret,        // = decrypt to 
     input_len: Option<u64>, on_progress: &mut OnProgress<'_>) -> Result<()>;
 
 // Internal seams. encrypt_deterministic takes an explicit salt/nonce_prefix + cap
-// (production passes fill_random values + MAX_PLAINTEXT; tests pass fixed values /
-// small caps). decrypt_impl backs both decrypt and verify — there is NO BodyMode
-// enum; verify simply passes io::sink() as the output.
-fn encrypt_deterministic<R, W>(/* .. */ max_plaintext: u64, salt: &[u8;16], nonce_prefix: &[u8;7]) -> Result<()>;
+// + start_counter (production passes fill_random values, MAX_PLAINTEXT, and
+// start_counter = 0; tests pass fixed values / small caps, and a u32::MAX
+// start_counter to exercise the 2^32-chunk guard). decrypt_impl backs both decrypt
+// and verify — there is NO BodyMode enum; verify simply passes io::sink().
+fn encrypt_deterministic<R, W>(/* .. */ max_plaintext: u64, salt: &[u8;16], nonce_prefix: &[u8;7], start_counter: u32) -> Result<()>;
 fn decrypt_impl<R, W>(/* .. */ max_plaintext: u64) -> Result<()>;
 ```
 
@@ -461,8 +462,18 @@ Rules to implement:
   chunk, swapped chunks, sub-tag fragment, empty body.
 - Size cap: with a tiny `size_cap`, encrypt of `cap+1` bytes → `InputTooLarge`;
   a crafted over-cap authenticated stream → decrypt/verify `InputTooLarge`.
-- Cancellation: an `on_progress` returning `Break` after N chunks →
-  `SymError::Canceled`.
+- Cancellation: an `on_progress` returning `Break` → `SymError::Canceled`, on the
+  encrypt path (before KDF and between chunks) and on the decrypt/verify path.
+- Per-file uniqueness: two encryptions of identical input/secret/opts produce
+  different ciphertext (fresh random salt + nonce prefix) and both still decrypt.
+- I/O errors: a failing `Write` (encrypt) and a failing `Read` mid-body (decrypt)
+  surface as `SymError::Io`, distinct from EOF→`MalformedHeader` and tag→`Auth`.
+- Chunk-count overflow: driving the `start_counter` seam to `u32::MAX` makes a
+  multi-chunk encrypt return `InputTooLarge`. (The decrypt-side guard is left
+  uncovered: reaching it would require forging 2^32 authentic chunks.)
+- Default-chunk round-trip: several MiB through the production 64 KiB chunk size
+  (the other round-trips use the 4 KiB minimum), plus the 65535/65536/65537
+  boundary sizes.
 
 **Checklist**
 

@@ -437,4 +437,120 @@ mod tests {
         let trailing = format!("{armored}   \n\t\n");
         assert_eq!(dearmor(trailing.as_bytes()).unwrap(), b"payload");
     }
+
+    /// Read through `auto_dearmor` over owned bytes, mapping framing errors as
+    /// the `dearmor` helper does.
+    fn auto_read(bytes: Vec<u8>) -> Result<Vec<u8>> {
+        let mut r = auto_dearmor(io::Cursor::new(bytes))?;
+        let mut out = Vec::new();
+        r.read_to_end(&mut out)
+            .map_err(|e| crate::error::recover_symerror(e).unwrap_or_else(SymError::Io))?;
+        Ok(out)
+    }
+
+    #[test]
+    fn auto_dearmor_treats_empty_and_whitespace_as_binary() {
+        // Empty input: binary passthrough, no missing-BEGIN-marker error.
+        assert_eq!(auto_read(Vec::new()).unwrap(), b"");
+
+        // All-whitespace input is binary, returned unchanged. If it were treated
+        // as armored it would error on the missing BEGIN marker.
+        let ws = b"   \n\t\n".to_vec();
+        assert_eq!(auto_read(ws.clone()).unwrap(), ws);
+
+        // More than DETECT_PEEK leading whitespace bytes still classify binary.
+        let mut long_ws = vec![b' '; DETECT_PEEK + 10];
+        long_ws.push(b'X');
+        assert_eq!(auto_read(long_ws.clone()).unwrap(), long_ws);
+    }
+
+    #[test]
+    fn writer_buffers_across_many_small_writes() {
+        let payload: Vec<u8> = (0..200u32).map(|i| (i * 7 + 3) as u8).collect();
+        let mut out = Vec::new();
+        let mut w = ArmorWriter::new(&mut out).unwrap();
+        // Chunk sizes straddle the 48-byte line boundary to exercise the carry.
+        let mut off = 0;
+        for size in [1usize, 7, 40, 48, 49] {
+            let end = (off + size).min(payload.len());
+            w.write_all(&payload[off..end]).unwrap();
+            off = end;
+        }
+        w.write_all(&payload[off..]).unwrap(); // the rest
+        w.finish().unwrap();
+
+        assert_eq!(dearmor(&out).unwrap(), payload);
+
+        // Framing remains well-formed.
+        let text = String::from_utf8(out).unwrap();
+        let lines: Vec<&str> = text.split('\n').collect();
+        assert_eq!(lines[0], BEGIN_MARKER);
+        assert_eq!(*lines.last().unwrap(), "");
+        assert_eq!(lines[lines.len() - 2], END_MARKER);
+        for line in &lines[1..lines.len() - 2] {
+            assert!(line.len() <= LINE_COLUMNS, "line too long: {line:?}");
+        }
+    }
+
+    /// A `Read` that yields at most one byte per call. The first call returns an
+    /// `Interrupted` error (without consuming input) to exercise the retry arm in
+    /// `auto_dearmor`'s detection loop; later reads deliver one byte each.
+    /// `ArmorReader::refill` does not retry `Interrupted`, so we only inject it
+    /// during the single-byte detection phase.
+    struct Drip<R> {
+        inner: R,
+        calls: usize,
+    }
+
+    impl<R> Drip<R> {
+        fn new(inner: R) -> Self {
+            Self { inner, calls: 0 }
+        }
+    }
+
+    impl<R: Read> Read for Drip<R> {
+        fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
+            self.calls += 1;
+            if self.calls == 1 {
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            if dst.is_empty() {
+                return Ok(0);
+            }
+            self.inner.read(&mut dst[..1])
+        }
+    }
+
+    #[test]
+    fn dearmor_round_trips_with_byte_at_a_time_reader() {
+        let payload: Vec<u8> = (0..300u32).map(|i| (i % 256) as u8).collect();
+        let armored = armor(&payload);
+        let mut r = auto_dearmor(Drip::new(armored.as_slice())).unwrap();
+        let mut out = Vec::new();
+        r.read_to_end(&mut out).unwrap();
+        assert_eq!(out, payload);
+    }
+
+    #[test]
+    fn writer_flush_midstream_is_safe() {
+        // A mid-stream flush over a short write must not emit a partial body
+        // line: only the BEGIN marker and its newline appear so far. The shared
+        // `Vec` is captured via a raw-byte snapshot after the flush.
+        let snapshot;
+        let mut out = Vec::new();
+        {
+            let mut w = ArmorWriter::new(&mut out).unwrap();
+            w.write_all(&[0x5Au8; 10]).unwrap(); // fewer than one full 48-byte line
+            w.flush().unwrap();
+            snapshot = w.inner.clone();
+
+            // Writing the rest and finishing still yields a clean round-trip.
+            w.write_all(&[0xA5u8; 90]).unwrap();
+            w.finish().unwrap();
+        }
+        assert_eq!(snapshot, format!("{BEGIN_MARKER}\n").into_bytes());
+        let mut expected = vec![0x5Au8; 10];
+        expected.extend_from_slice(&[0xA5u8; 90]);
+        assert_eq!(dearmor(&out).unwrap(), expected);
+    }
 }

@@ -171,4 +171,44 @@ mod tests {
         assert_eq!(strip_encrypt_suffix("x.symcrypt"), "x");
         assert_eq!(strip_encrypt_suffix("x.asc"), "x");
     }
+
+    // A non-UTF-8 filename can't be suffix-stripped safely, so `.dec` is appended
+    // (DESIGN §6.5). Unix-gated: constructing a non-UTF-8 path is platform-specific.
+    #[cfg(unix)]
+    #[test]
+    fn decrypt_output_appends_dec_for_non_utf8_filename() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let raw = [b'f', b'o', b'o', 0x80u8];
+        let name = std::ffi::OsStr::from_bytes(&raw);
+        let input = Path::new("dir").join(name);
+        let header = header_with_name(None);
+        assert_eq!(header.name_status, NameStatus::Absent);
+
+        // Expected: the whole input OsString with `.dec` pushed, as the fn does.
+        let mut expected = input.as_os_str().to_os_string();
+        expected.push(".dec");
+        let expected = PathBuf::from(expected);
+
+        assert_eq!(default_decrypt_output(&input, &header), expected);
+    }
+
+    // A safe Present stored name short-circuits before the `to_str()` branch, so a
+    // non-UTF-8 input path still yields the stored name beside the input dir.
+    #[cfg(unix)]
+    #[test]
+    fn decrypt_output_uses_present_name_even_with_non_utf8_input() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let raw = [b'f', b'o', b'o', 0x80u8];
+        let name = std::ffi::OsStr::from_bytes(&raw);
+        let input = Path::new("dir").join(name);
+        let header = header_with_name(Some("real.txt"));
+        assert_eq!(header.name_status, NameStatus::Present);
+
+        assert_eq!(
+            default_decrypt_output(&input, &header),
+            PathBuf::from("dir/real.txt")
+        );
+    }
 }

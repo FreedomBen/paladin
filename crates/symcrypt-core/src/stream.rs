@@ -168,13 +168,15 @@ pub(crate) fn encrypt<R: Read, W: Write>(
         MAX_PLAINTEXT,
         &salt,
         &nonce_prefix,
+        0,
     )
 }
 
 /// The core encrypt path with an explicit salt, nonce prefix, and plaintext cap.
-/// Production ([`encrypt`]) supplies OS-random values; tests supply fixed values
-/// to produce reproducible known-answer vectors and to exercise the size cap
-/// cheaply. A real file always uses fresh randomness.
+/// Production ([`encrypt`]) supplies OS-random values and `start_counter = 0`;
+/// tests supply fixed values to produce reproducible known-answer vectors, to
+/// exercise the size cap cheaply, and to drive the chunk counter near its 2^32
+/// limit. A real file always uses fresh randomness and starts at counter 0.
 #[allow(clippy::too_many_arguments)]
 fn encrypt_deterministic<R: Read, W: Write>(
     mut input: R,
@@ -186,6 +188,7 @@ fn encrypt_deterministic<R: Read, W: Write>(
     max_plaintext: u64,
     salt: &[u8; SALT_LEN],
     nonce_prefix: &[u8; NONCE_PREFIX_LEN],
+    start_counter: u32,
 ) -> Result<()> {
     opts.validate()?;
     report(on_progress, 0, input_len)?; // cancel before key derivation
@@ -209,7 +212,7 @@ fn encrypt_deterministic<R: Read, W: Write>(
 
     let cipher = Cipher::new(opts.cipher, &key);
     let chunk_size = opts.chunk_size as usize;
-    let mut counter: u32 = 0;
+    let mut counter: u32 = start_counter;
     let mut done: u64 = 0;
 
     let mut cur = read_up_to(&mut input, chunk_size)?;
@@ -637,6 +640,7 @@ mod tests {
             100,
             &[0u8; SALT_LEN],
             &[0u8; NONCE_PREFIX_LEN],
+            0,
         );
         assert!(matches!(err, Err(SymError::InputTooLarge)));
     }
@@ -743,6 +747,7 @@ mod tests {
                 MAX_PLAINTEXT,
                 &salt,
                 &nonce,
+                0,
             )
             .unwrap();
             assert_eq!(
@@ -815,6 +820,7 @@ mod tests {
                 MAX_PLAINTEXT,
                 &salt,
                 &nonce,
+                0,
             )
             .unwrap();
             w.finish().unwrap();
@@ -828,5 +834,287 @@ mod tests {
         let mut cb = noop();
         crate::decrypt(armored.as_bytes(), &mut out, &kat_secret, None, &mut cb).unwrap();
         assert_eq!(out, plaintext);
+    }
+
+    /// A fresh OS-random salt and nonce prefix per encryption means encrypting
+    /// the same plaintext twice never yields the same ciphertext, so no
+    /// (key, nonce) pair is ever reused across files (DESIGN §4.3, §5.5).
+    #[test]
+    fn each_encryption_uses_fresh_salt_and_nonce() {
+        let opts = fast_opts(CipherId::Aes256Gcm);
+        let data = b"the same plaintext encrypted twice";
+        let a = enc(data, &opts);
+        let b = enc(data, &opts);
+        assert_ne!(a, b, "two encryptions of one plaintext must differ");
+        assert_eq!(dec(&a).unwrap(), data);
+        assert_eq!(dec(&b).unwrap(), data);
+
+        // Sharper: the per-file salt and nonce prefix themselves differ.
+        let ha = header::parse(&mut io::Cursor::new(a.clone())).unwrap();
+        let hb = header::parse(&mut io::Cursor::new(b.clone())).unwrap();
+        assert_ne!(ha.salt, hb.salt, "per-file salt must be fresh");
+        assert_ne!(
+            ha.nonce_prefix, hb.nonce_prefix,
+            "per-file nonce prefix must be fresh"
+        );
+    }
+
+    #[test]
+    fn cancellation_before_kdf_on_decrypt_returns_canceled() {
+        let ct = enc(b"payload", &fast_opts(CipherId::Aes256Gcm));
+        let mut cb = |_: Progress| ControlFlow::Break(());
+        let mut out = Vec::new();
+        assert!(matches!(
+            decrypt(ct.as_slice(), &mut out, &secret(), None, &mut cb),
+            Err(SymError::Canceled)
+        ));
+    }
+
+    #[test]
+    fn cancellation_between_chunks_on_decrypt_returns_canceled() {
+        let opts = fast_opts(CipherId::Aes256Gcm);
+        let data: Vec<u8> = (0..20_000).map(|i| (i % 251) as u8).collect();
+        let ct = enc(&data, &opts);
+        // Continue through the two pre/post-KDF reports, then break.
+        let mut calls = 0;
+        let mut cb = move |_: Progress| {
+            calls += 1;
+            if calls <= 3 {
+                ControlFlow::Continue(())
+            } else {
+                ControlFlow::Break(())
+            }
+        };
+        let mut out = Vec::new();
+        assert!(matches!(
+            decrypt(ct.as_slice(), &mut out, &secret(), None, &mut cb),
+            Err(SymError::Canceled)
+        ));
+    }
+
+    #[test]
+    fn cancellation_on_verify_returns_canceled() {
+        let ct = enc(b"payload", &fast_opts(CipherId::Aes256Gcm));
+        let mut cb = |_: Progress| ControlFlow::Break(());
+        assert!(matches!(
+            verify(ct.as_slice(), &secret(), None, &mut cb),
+            Err(SymError::Canceled)
+        ));
+    }
+
+    /// A reader that yields at most one byte per `read` and injects an
+    /// `Interrupted` error on every other call, exercising `read_up_to`'s fill
+    /// loop and its Interrupted-retry arm (DESIGN §5.5).
+    struct Drip<R> {
+        inner: R,
+        calls: usize,
+    }
+
+    impl<R: Read> Drip<R> {
+        fn new(inner: R) -> Self {
+            Self { inner, calls: 0 }
+        }
+    }
+
+    impl<R: Read> Read for Drip<R> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.calls += 1;
+            if self.calls.is_multiple_of(2) {
+                return Err(io::Error::new(io::ErrorKind::Interrupted, "drip"));
+            }
+            if buf.is_empty() {
+                return Ok(0);
+            }
+            self.inner.read(&mut buf[..1])
+        }
+    }
+
+    #[test]
+    fn round_trips_through_byte_at_a_time_reader() {
+        let opts = fast_opts(CipherId::Aes256Gcm);
+        let data: Vec<u8> = (0..(3 * 4096 + 57)).map(|i| (i % 251) as u8).collect();
+        let mut out = Vec::new();
+        let mut cb = noop();
+        encrypt(
+            Drip::new(data.as_slice()),
+            &mut out,
+            &secret(),
+            &opts,
+            None,
+            &mut cb,
+        )
+        .unwrap();
+        let mut dec_out = Vec::new();
+        let mut cb = noop();
+        decrypt(
+            Drip::new(out.as_slice()),
+            &mut dec_out,
+            &secret(),
+            None,
+            &mut cb,
+        )
+        .unwrap();
+        assert_eq!(dec_out, data);
+    }
+
+    /// A writer that fails every write, so the header `write_all` surfaces the
+    /// I/O error as [`SymError::Io`] (DESIGN §5.5).
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "boom"))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn write_error_surfaces_as_io() {
+        let opts = fast_opts(CipherId::Aes256Gcm);
+        let mut cb = noop();
+        assert!(matches!(
+            encrypt(
+                b"data".as_ref(),
+                FailingWriter,
+                &secret(),
+                &opts,
+                None,
+                &mut cb
+            ),
+            Err(SymError::Io(_))
+        ));
+    }
+
+    /// A reader that serves bytes normally until `pos >= fail_at`, then returns a
+    /// genuine (non-Interrupted) I/O error, exercising `read_up_to`'s error arm.
+    struct FailAfter {
+        data: Vec<u8>,
+        pos: usize,
+        fail_at: usize,
+    }
+
+    impl Read for FailAfter {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.pos >= self.fail_at {
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "boom"));
+            }
+            let remaining = &self.data[self.pos..];
+            let n = remaining.len().min(buf.len());
+            buf[..n].copy_from_slice(&remaining[..n]);
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn read_error_in_body_surfaces_as_io() {
+        let opts = fast_opts(CipherId::Aes256Gcm);
+        let ct = enc(b"payload that spans into the body", &opts);
+        // Land the failure one byte into the body so it hits read_up_to's
+        // non-Interrupted error arm rather than the header parse path. A plain
+        // BrokenPipe is not a wrapped SymError, so recover_symerror returns it
+        // and it maps to SymError::Io.
+        let header_len = header::parse(&mut io::Cursor::new(ct.clone()))
+            .unwrap()
+            .aad()
+            .len();
+        let reader = FailAfter {
+            data: ct.clone(),
+            pos: 0,
+            fail_at: header_len + 1,
+        };
+        let mut out = Vec::new();
+        let mut cb = noop();
+        assert!(matches!(
+            decrypt(reader, &mut out, &secret(), None, &mut cb),
+            Err(SymError::Io(_))
+        ));
+    }
+
+    /// A several-MiB round-trip at the production default 64 KiB chunk size
+    /// (DESIGN §10). The existing round-trips all use the 4096 test chunk size,
+    /// so this is the only coverage of the real default chunking.
+    #[test]
+    fn round_trip_several_mib_at_default_chunk_size() {
+        let opts = EncryptOptions {
+            cipher: CipherId::Aes256Gcm,
+            kdf: KdfId::Pbkdf2,
+            kdf_params: cheap_params(KdfId::Pbkdf2),
+            chunk_size: 65536,
+            filename: None,
+            armor: false,
+        };
+        let data: Vec<u8> = (0..4 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+        assert_eq!(dec(&enc(&data, &opts)).unwrap(), data);
+    }
+
+    #[test]
+    fn round_trip_at_default_chunk_boundaries() {
+        let opts = EncryptOptions {
+            cipher: CipherId::Aes256Gcm,
+            kdf: KdfId::Pbkdf2,
+            kdf_params: cheap_params(KdfId::Pbkdf2),
+            chunk_size: 65536,
+            filename: None,
+            armor: false,
+        };
+        for &n in &[65535usize, 65536, 65537] {
+            let data: Vec<u8> = (0..n).map(|i| (i % 251) as u8).collect();
+            let ct = enc(&data, &opts);
+            assert_eq!(dec(&ct).unwrap(), data, "size {n}");
+        }
+    }
+
+    /// A stream needing more than 2^32 chunks is rejected (DESIGN §4.3). The
+    /// `start_counter` test seam lets us drive the encrypt counter to its limit
+    /// cheaply: the first chunk seals at counter = u32::MAX (not final), then the
+    /// `checked_add` for the next chunk overflows. The decrypt-side counter
+    /// overflow guard is intentionally left uncovered, since reaching it would
+    /// require forging 2^32 authentic chunks.
+    #[test]
+    fn encrypt_rejects_more_than_2_32_chunks() {
+        let opts = fast_opts(CipherId::Aes256Gcm);
+        let data = vec![0u8; 4096 * 2]; // exactly two full chunks
+        let mut out = Vec::new();
+        let mut cb = noop();
+        let err = encrypt_deterministic(
+            data.as_slice(),
+            &mut out,
+            &secret(),
+            &opts,
+            None,
+            &mut cb,
+            MAX_PLAINTEXT,
+            &[0u8; SALT_LEN],
+            &[0u8; NONCE_PREFIX_LEN],
+            u32::MAX,
+        );
+        assert!(matches!(err, Err(SymError::InputTooLarge)));
+    }
+
+    #[test]
+    fn progress_done_is_monotonic_and_total_none_when_unknown() {
+        let opts = fast_opts(CipherId::Aes256Gcm);
+        let data = vec![1u8; 4096 * 3 + 100];
+        let seen: std::cell::RefCell<Vec<Progress>> = std::cell::RefCell::new(Vec::new());
+        {
+            let mut cb = |p: Progress| {
+                seen.borrow_mut().push(p);
+                ControlFlow::Continue(())
+            };
+            let mut out = Vec::new();
+            encrypt(data.as_slice(), &mut out, &secret(), &opts, None, &mut cb).unwrap();
+        }
+        let seen = seen.into_inner();
+        assert!(!seen.is_empty());
+        assert!(seen.iter().all(|p| p.total.is_none()), "total must be None");
+        let mut prev = 0u64;
+        for p in &seen {
+            assert!(p.done >= prev, "done must be non-decreasing");
+            prev = p.done;
+        }
+        assert_eq!(seen.last().unwrap().done, data.len() as u64);
     }
 }

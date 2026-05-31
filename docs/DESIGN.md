@@ -918,7 +918,14 @@ chosen for being pure-Rust and widely reviewed.
   `InvalidOptions`; it rejects plaintext larger than the v1 size cap with
   `InputTooLarge` before any output is finalized.
 - Decrypt/verify size-cap enforcement rejects authenticated plaintext larger
-  than the v1 size cap with `InputTooLarge`.
+  than the v1 size cap with `InputTooLarge`; driving the encrypt counter to its
+  limit rejects a stream exceeding 2³² chunks with `InputTooLarge`.
+- Per-file uniqueness: two encryptions of the same input/secret produce
+  different ciphertext (fresh random salt + nonce prefix) and both decrypt.
+- Cancellation (`on_progress` → `Break`) yields `Canceled` on both the encrypt
+  and decrypt/verify paths; a caller `Read`/`Write` error surfaces as `Io`, kept
+  distinct from EOF→`MalformedHeader` and a failed tag→`Auth`, and short/partial
+  reads are reassembled correctly.
 - ASCII armor parser accepts LF/CRLF and surrounding whitespace, and rejects
   extra non-whitespace outside the markers, invalid base64, and missing end
   markers.
@@ -929,8 +936,9 @@ chosen for being pure-Rust and widely reviewed.
   rejection.
 
 **Round-trip** (parameterized over sizes: 0, 1, `chunk_size−1`, `chunk_size`,
-`chunk_size+1`, several MiB): encrypt then decrypt reproduces the input exactly,
-for each cipher and KDF.
+`chunk_size+1`, several MiB; exercised at both the minimum and the default 64 KiB
+chunk size): encrypt then decrypt reproduces the input exactly, for each cipher
+and KDF.
 
 **Negative / tamper**
 
