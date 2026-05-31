@@ -1,6 +1,6 @@
 # symcrypt — Design
 
-**Status:** Design phase. No implementation yet.
+**Status:** Core libraries (`symcrypt-core`, `symcrypt-common`) implemented and tested; front-end binaries (CLI/TUI/GTK) are scaffold stubs pending build-out.
 **Target stack:** Rust 1.94+, [relm4](https://relm4.org/) (gtk4-rs + libadwaita), [ratatui](https://ratatui.rs/).
 **Last updated:** 2026-05-29
 

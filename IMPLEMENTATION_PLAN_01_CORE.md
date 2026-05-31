@@ -19,8 +19,6 @@ plan, then the code.
 > checklists below are ticked to reflect that committed state — they now serve as
 > an as-built spec and a re-verification checklist. Re-run `cargo test` +
 > `cargo clippy --all-targets --all-features` to confirm green.
-> **Caveat:** the project `CLAUDE.md` still says "design phase — there is no Rust
-> code yet"; that line is now stale and should be updated.
 
 ---
 

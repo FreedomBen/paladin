@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Agent Instructions
 
-- `docs/DESIGN.md` is the source of truth for how the application and library should work.  If the user requests a change that conflicts, update docs/DESIGN.md so it stays in sync.
+- `DESIGN.md` is the source of truth for how the application and library should work.  If the user requests a change that conflicts, update DESIGN.md so it stays in sync.
 - When changing the CLI, TUI, or GTK, update the relevant `IMPLEMENTATION_PLAN_0X_*.md` with the new behavior and API details before implementing it.  This keeps design and implementation aligned.
 - Write exhaustive tests that cover base functionality and any edge cases, particularly for the core shared library.
 - Use a Test Driven Development (TDD) approach: write failing tests before implementing features, then implement the code to make the tests pass.
@@ -22,11 +22,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-`symcrypt` is in the **design phase — there is no Rust code yet.** The repository
-currently holds only design/planning documents; the Cargo workspace and crates
-described below do **not** exist on disk until the scaffolding step runs (see
-`IMPLEMENTATION_PLAN_01_CORE.md`). Until then, treat the documents as the source
-of truth and build against them.
+The Cargo workspace is scaffolded. The shared libraries — **`symcrypt-core`** (all
+crypto, file format, streaming, armor, pure helpers) and **`symcrypt-common`**
+(terminal glue) — are implemented and tested. The three front-end binaries
+(`symcrypt`, `symcrypt-tui`, `symcrypt-gtk`) are currently scaffold stubs that print
+a "not yet implemented" message and exit `2`; they are built out in
+`IMPLEMENTATION_PLAN_02_CLI.md`, `_03_TUI.md`, and `_04_GTK.md`. Treat `DESIGN.md` as
+the source of truth for how everything should behave.
 
 - **`DESIGN.md`** — the authoritative specification: architecture, threat model,
   cryptographic design, the exact binary file format, CLI/TUI/GTK specs,
@@ -45,8 +47,10 @@ only the password/keyfile — no out-of-band parameters.
 
 ## Development commands
 
-These become valid once the workspace is scaffolded (`IMPLEMENTATION_PLAN_01_CORE.md`);
-**nothing compiles yet.** It is a standard multi-crate Cargo workspace.
+This is a standard multi-crate Cargo workspace and it builds today: `symcrypt-core`
+and `symcrypt-common` are implemented and tested, while the three front-end binaries
+are scaffold stubs that compile but exit `2` ("not yet implemented") until built out
+per `IMPLEMENTATION_PLAN_02_CLI.md`–`_04_GTK.md`.
 
 | Task                       | Command                                                                              |
 | -------------------------- | ------------------------------------------------------------------------------------ |
@@ -143,14 +147,6 @@ moved into the worker inside a zeroizing buffer.
 - **Security-affecting changes:** state the implications and confirm before
   implementing, and add tests that verify the integrity property.
 - Exit codes: 0 ok · 1 general/IO · 2 usage · 3 auth failure · 4 unsupported
-  format/version — mapped from `SymError` in `symcrypt-common`, never classified
-  in the front-ends.
+  format/version · 130 canceled — mapped from `SymError` in `symcrypt-common`,
+  never classified in the front-ends.
 - Dependency versions are pinned via `cargo add` at scaffolding time.
-
-## ctx commands
-
-| Command | Action |
-|---------|--------|
-| `ctx stats` | Call the `ctx_stats` MCP tool and display the full output verbatim |
-| `ctx doctor` | Call the `ctx_doctor` MCP tool, run the returned shell command, display as checklist |
-| `ctx upgrade` | Call the `ctx_upgrade` MCP tool, run the returned shell command, display as checklist |
