@@ -4,24 +4,32 @@
 //!
 //! This pass implements the component skeleton plus the full view and
 //! field/state handling: modes and per-mode visibility, file browse,
-//! drag-and-drop, output prefill, and every input control. The actual crypto
-//! execution, cancellation, error toasts, Info inspect, and Verify behavior are
-//! deferred to a later pass; the `Run`/`Info`/`Verify`/`Cancel` paths here are
-//! inert stubs marked with `// TODO(pass 2): ...`.
+//! drag-and-drop, output prefill, and every input control. It also wires the
+//! actual crypto execution: Info inspects inline, while Encrypt/Decrypt/Verify
+//! run on a background worker (a `spawn_command` blocking task) that streams
+//! `Progress` and a terminal `RunSuccess`/`RunError` back as [`CommandOutput`],
+//! with cooperative cancellation and an overwrite-confirm dialog.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use adw::prelude::*;
 use relm4::prelude::*;
 use relm4::{Component, ComponentParts, ComponentSender};
+use zeroize::Zeroizing;
 
 use symcrypt_core::{
-    default_decrypt_output, default_encrypt_output, inspect, CipherId, KdfId, Progress,
+    default_decrypt_output, default_encrypt_output, inspect, CipherId, EncryptOptions, KdfId,
+    Progress, Secret,
 };
 
+use crate::fsio::{self, FsError};
+use crate::info;
+use crate::message;
 use crate::mode::{Field, Mode};
 use crate::options::{self, KnobInput};
-use crate::task::{RunError, RunSuccess};
+use crate::task::{self, Job, RunError, RunSuccess};
 
 /// The four ciphers/KDFs offered in the Advanced selectors, kept in a stable
 /// order so a `ComboRow` selection index maps back to the enum.
@@ -47,8 +55,8 @@ pub enum Knob {
     Pbkdf2Iterations,
 }
 
-/// The run lifecycle. Only [`RunState::Idle`] is reachable this pass; the other
-/// variants are defined now and driven by the execution pass.
+/// The run lifecycle. `Idle` at rest; `Running` while a worker operates;
+/// terminal `Done`/`Canceled`/`Error` after it reports back.
 #[derive(Debug, Clone)]
 pub enum RunState {
     /// No operation in flight.
@@ -57,6 +65,8 @@ pub enum RunState {
     Running {
         /// Current progress fraction for the gauge.
         fraction: f64,
+        /// Shared flag the worker observes; setting it cancels the run.
+        cancel: Arc<AtomicBool>,
     },
     /// The last operation finished successfully; `String` is a summary.
     Done(String),
@@ -95,9 +105,9 @@ pub struct AppModel {
     remove_input: bool,
     /// Whether overwriting an existing output is approved.
     overwrite_approved: bool,
-    /// The run lifecycle state (only `Idle` this pass).
+    /// The run lifecycle state.
     run_state: RunState,
-    /// The Info pane contents (empty this pass).
+    /// The Info pane contents (the rendered header, after a successful Info run).
     info_text: Option<String>,
     /// Toast surface; toasts are emitted via [`adw::ToastOverlay::add_toast`].
     toast_overlay: adw::ToastOverlay,
@@ -138,14 +148,14 @@ pub enum AppInput {
     ToggleRemove(bool),
     /// Toggle overwrite approval.
     ToggleOverwrite(bool),
-    /// Start the active operation (stub this pass).
+    /// Start the active operation (Info inline; others on the worker).
     Run,
-    /// Cancel the running operation (stub this pass).
+    /// Cancel the running worker operation.
     Cancel,
 }
 
 /// Messages produced by the worker command and handled in
-/// [`Component::update_cmd`]. Defined now; driven by the execution pass.
+/// [`Component::update_cmd`].
 pub enum CommandOutput {
     /// A progress report from the worker.
     Progress(Progress),
@@ -346,7 +356,7 @@ impl Component for AppModel {
                             set_visible: matches!(model.run_state, RunState::Running { .. }),
                             #[watch]
                             set_fraction: match model.run_state {
-                                RunState::Running { fraction } => fraction,
+                                RunState::Running { fraction, .. } => fraction,
                                 _ => 0.0,
                             },
                         },
@@ -781,34 +791,276 @@ impl Component for AppModel {
             AppInput::ToggleRemove(on) => self.remove_input = on,
             AppInput::ToggleOverwrite(on) => self.overwrite_approved = on,
             AppInput::Run => {
-                // TODO(pass 2): build the Secret + Job and dispatch the crypto
-                // operation on a worker via `sender.command(...)`, mapping
-                // results into `CommandOutput`. Info runs inline; Verify and
-                // Encrypt/Decrypt run on the worker.
-                self.toast("Run wiring comes next");
+                // `Run` needs the password widgets, so it is handled in
+                // `update_with_view` (which has `&mut Widgets`). Reaching here
+                // would mean the override was removed; do nothing rather than
+                // silently misbehave.
             }
             AppInput::Cancel => {
-                // TODO(pass 2): flip the shared cancel flag the worker observes.
-                self.toast("Cancel wiring comes next");
+                // Flip the shared flag the worker observes; the core returns
+                // `SymError::Canceled` and `run_job` rolls back its temp. Stay
+                // `Running` until the worker reports `Finished`.
+                if let RunState::Running { cancel, .. } = &self.run_state {
+                    cancel.store(true, Ordering::Relaxed);
+                }
             }
         }
+    }
+
+    /// relm4 calls this for every input; we intercept [`AppInput::Run`] here
+    /// because it must read the password/confirm entry widgets, then refresh
+    /// the view. All other inputs delegate to [`Self::update`].
+    fn update_with_view(
+        &mut self,
+        widgets: &mut Self::Widgets,
+        msg: Self::Input,
+        sender: ComponentSender<Self>,
+        root: &Self::Root,
+    ) {
+        match msg {
+            AppInput::Run => self.start_run(widgets, &sender, root),
+            other => self.update(other, sender.clone(), root),
+        }
+        self.update_view(widgets, sender);
     }
 
     fn update_cmd(
         &mut self,
         msg: Self::CommandOutput,
-        _sender: ComponentSender<Self>,
-        _root: &Self::Root,
+        sender: ComponentSender<Self>,
+        root: &Self::Root,
     ) {
-        // TODO(pass 2): drive `run_state` from worker progress/results and emit
-        // success/error toasts. Inert this pass.
         match msg {
-            CommandOutput::Progress(_) | CommandOutput::Finished(_) => {}
+            CommandOutput::Progress(p) => {
+                let fraction = p
+                    .total
+                    .map(|t| {
+                        if t == 0 {
+                            1.0
+                        } else {
+                            p.done as f64 / t as f64
+                        }
+                    })
+                    .unwrap_or(0.0);
+                // Keep the existing cancel handle; only advance the gauge.
+                if let RunState::Running { cancel, .. } = &self.run_state {
+                    let cancel = cancel.clone();
+                    self.run_state = RunState::Running { fraction, cancel };
+                }
+            }
+            CommandOutput::Finished(Ok(success)) => {
+                // The op succeeded; a remove failure is a non-fatal warning.
+                self.run_state = RunState::Done(self.success_summary());
+                self.toast(&self.success_summary());
+                if let Some(warning) = success.remove_warning {
+                    self.toast(&warning);
+                }
+                // Re-arm the overwrite gate so a later run re-confirms.
+                self.overwrite_approved = false;
+            }
+            CommandOutput::Finished(Err(RunError::Core(ce))) if message::is_user_cancel(&ce) => {
+                // A deliberate cancel is a neutral state, not a failure.
+                self.run_state = RunState::Canceled;
+                self.toast("Canceled");
+                self.overwrite_approved = false;
+            }
+            CommandOutput::Finished(Err(RunError::Fs(FsError::OutputExists(path)))) => {
+                // Do not toast: ask the user to confirm the overwrite, then
+                // re-run with approval (or reset to Idle on cancel).
+                self.run_state = RunState::Idle;
+                self.confirm_overwrite(root, &sender, &path);
+            }
+            CommandOutput::Finished(Err(RunError::Core(ce))) => {
+                let text = message::user_message(&ce);
+                self.run_state = RunState::Error(text.clone());
+                self.toast(&text);
+                self.overwrite_approved = false;
+            }
+            CommandOutput::Finished(Err(RunError::Fs(fe))) => {
+                let text = fe.to_string();
+                self.run_state = RunState::Error(text.clone());
+                self.toast(&text);
+                self.overwrite_approved = false;
+            }
         }
     }
 }
 
 impl AppModel {
+    /// Handle [`AppInput::Run`]. Info inspects the header inline (no password,
+    /// no worker); Encrypt/Decrypt/Verify validate the secret, build a [`Job`],
+    /// and dispatch it to a background blocking task that streams progress and a
+    /// terminal result back as [`CommandOutput`]. Every early return leaves the
+    /// form interactive (the run never starts) after an explanatory toast.
+    fn start_run(
+        &mut self,
+        widgets: &mut AppModelWidgets,
+        sender: &ComponentSender<Self>,
+        _root: &<Self as Component>::Root,
+    ) {
+        // --- Info: inline inspect, no password, no worker -------------------
+        if !self.mode.runs_on_worker() {
+            let Some(input) = self.input.clone() else {
+                self.toast("Choose a file to inspect first.");
+                return;
+            };
+            match Self::open_and_inspect(&input) {
+                Ok(header) => self.info_text = Some(info::header_text(&header)),
+                Err(e) => self.toast(&message::user_message(&e)),
+            }
+            return;
+        }
+
+        // --- Encrypt / Decrypt / Verify: validate then dispatch -------------
+        let Some(input) = self.input.clone() else {
+            self.toast("Choose an input file first.");
+            return;
+        };
+
+        // Read the password (and, in Encrypt, the confirmation) into zeroizing
+        // buffers. Never logged; moved into the worker.
+        let password = Zeroizing::new(widgets.password_row.text().as_bytes().to_vec());
+        let confirm = (self.mode == Mode::Encrypt)
+            .then(|| Zeroizing::new(widgets.confirm_row.text().as_bytes().to_vec()));
+
+        // Read the keyfile bytes (kept in the zeroizing buffer it returns).
+        let keyfile_bytes = match &self.keyfile {
+            Some(path) => match fsio::read_keyfile(path) {
+                Ok(bytes) => Some(bytes),
+                Err(e) => {
+                    self.toast(&e.to_string());
+                    return;
+                }
+            },
+            None => None,
+        };
+
+        let confirm_arg: Option<&[u8]> = confirm.as_ref().map(|b| b.as_slice());
+        let keyfile_arg: Option<&[u8]> = keyfile_bytes.as_ref().map(|b| b.as_slice());
+
+        if let Err(e) =
+            options::validate_secret(&password, confirm_arg, keyfile_arg, self.keyfile_only)
+        {
+            self.toast(&e.to_string());
+            return;
+        }
+
+        let secret = match Secret::new(&password, keyfile_arg) {
+            Ok(secret) => secret,
+            Err(e) => {
+                self.toast(&message::user_message(&e));
+                return;
+            }
+        };
+
+        // Encrypt needs full options; Decrypt/Verify ignore them.
+        let options = if self.mode == Mode::Encrypt {
+            match options::build_encrypt_options(
+                &input,
+                self.cipher,
+                self.kdf,
+                &self.knobs,
+                self.name_enabled,
+                self.armor,
+            ) {
+                Ok(opts) => opts,
+                Err(e) => {
+                    self.toast(&e.to_string());
+                    return;
+                }
+            }
+        } else {
+            EncryptOptions::default()
+        };
+
+        let output = if self.mode.needs_output() {
+            self.output.clone()
+        } else {
+            None
+        };
+
+        let job = Job {
+            mode: self.mode,
+            input,
+            output,
+            secret,
+            options,
+            overwrite_approved: self.overwrite_approved,
+            remove_input: self.remove_input,
+        };
+
+        // Shared cancel flag: a clone lives in the state for `Cancel` to flip;
+        // the worker borrows the moved copy.
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.run_state = RunState::Running {
+            fraction: 0.0,
+            cancel: cancel.clone(),
+        };
+
+        // Crypto is CPU-bound, so run it on relm4's blocking pool. The `Job`
+        // (with its `Secret` and zeroizing buffers) moves into the task.
+        sender.spawn_command(move |out| {
+            let result = task::run_job(job, &cancel, |p| {
+                let _ = out.send(CommandOutput::Progress(p));
+            });
+            let _ = out.send(CommandOutput::Finished(result));
+        });
+    }
+
+    /// Open `path` and run the core `inspect`, surfacing the [`SymError`] so the
+    /// caller can render it via [`message::user_message`].
+    fn open_and_inspect(path: &Path) -> Result<symcrypt_core::Header, symcrypt_core::SymError> {
+        let file = std::fs::File::open(path).map_err(symcrypt_core::SymError::Io)?;
+        inspect(std::io::BufReader::new(file))
+    }
+
+    /// A short per-mode success line for the toast and `Done` summary.
+    fn success_summary(&self) -> String {
+        let name = self
+            .input
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".to_owned());
+        match self.mode {
+            Mode::Encrypt => format!("Encrypted {name}"),
+            Mode::Decrypt => format!("Decrypted {name}"),
+            Mode::Verify => "Integrity verified".to_owned(),
+            // Info never runs on the worker, so it never reaches here.
+            Mode::Info => "Done".to_owned(),
+        }
+    }
+
+    /// Pop an overwrite-confirm dialog for an existing output. On confirm,
+    /// approve the overwrite and re-run; on cancel, stay idle. Uses
+    /// `adw::MessageDialog` (the only dialog the enabled `v1_4` feature gives).
+    fn confirm_overwrite(
+        &self,
+        root: &<Self as Component>::Root,
+        sender: &ComponentSender<Self>,
+        path: &Path,
+    ) {
+        let dialog = adw::MessageDialog::new(
+            Some(root),
+            Some("Overwrite file?"),
+            Some(&format!("{} already exists.", path.display())),
+        );
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("overwrite", "Overwrite");
+        dialog.set_response_appearance("overwrite", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        let sender = sender.clone();
+        dialog.connect_response(None, move |dialog, response| {
+            if response == "overwrite" {
+                sender.input(AppInput::ToggleOverwrite(true));
+                sender.input(AppInput::Run);
+            }
+            dialog.destroy();
+        });
+        dialog.present();
+    }
+
     /// Apply a single KDF knob value to the model.
     fn set_knob(&mut self, knob: Knob, value: u32) {
         match knob {
