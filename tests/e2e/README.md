@@ -67,10 +67,13 @@ SYMCRYPT_BIN=target/release/symcrypt tests/e2e/run.sh   # test a release build
   pass `--output` so the filename restored from the header can't clobber one.
 - Generate sized / binary inputs at runtime; commit only small `golden/` files.
 
-## Planned cases
+## Cases
 
-`roundtrip · cipher · kdf · armor · password_sources · keyfile · streaming ·
-info_verify · clobber_remove · failures (exit-code matrix) · backward_compat`
+Implemented: `roundtrip` — `cases/roundtrip_test.rb` folds in the former
+top-level `tests/roundtrip_cli.sh`: round-trip identity across sizes (including
+empty input and the 64 KiB chunk boundary), the ciphertext-grows check, and the
+default `.symcrypt` output name. It uses a cheap KDF for the size sweep and the
+real default Argon2id for the fixture case.
 
-`cases/roundtrip_test.rb` will absorb the assertions currently in the top-level
-`tests/roundtrip_cli.sh`; once it does, that standalone script can be removed.
+Planned: `cipher · kdf · armor · password_sources · keyfile · streaming ·
+info_verify · clobber_remove · failures (exit-code matrix) · backward_compat`.
