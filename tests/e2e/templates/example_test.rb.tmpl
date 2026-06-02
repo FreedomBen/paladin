@@ -1,0 +1,44 @@
+# frozen_string_literal: true
+#
+# TEMPLATE — not run by the suite (it lives outside cases/ and isn't named
+# *_test.rb). Copy it into cases/ and implement real cases:
+#
+#   cp templates/example_test.rb.tmpl cases/roundtrip_test.rb
+#
+# Run everything:       tests/e2e/run.sh
+# Filter by name:       tests/e2e/run.sh -n /round_trip/
+# Run a file directly:  ruby -Itests/e2e tests/e2e/cases/roundtrip_test.rb
+
+require "test_helper"
+
+class ExampleTest < E2ETest
+  # Happy path: encrypt the fixture, confirm the ciphertext grew, decrypt, and
+  # confirm the result is byte-for-byte identical to the original.
+  def test_round_trip_matches_original
+    input  = Symcrypt::LOREM
+    cipher = tmp("cipher.symcrypt")
+    plain  = tmp("decrypted.txt")
+    env    = { "PW" => DEFAULT_PASSWORD }
+
+    enc = symcrypt("--encrypt", input, "--output", cipher,
+                   "--password-env", "PW", env: env)
+    assert_status enc, 0
+    assert_size_grew input, cipher
+
+    # Pass --output so the filename restored from the header can't clobber a
+    # fixture.
+    dec = symcrypt("--decrypt", cipher, "--output", plain,
+                   "--password-env", "PW", env: env)
+    assert_status dec, 0
+    assert_identical input, plain
+  end
+
+  # Expected-failure pattern. Confirm the real exit code against DESIGN.md /
+  # symcrypt-common before asserting on it.
+  def test_wrong_password_is_rejected
+    skip "example — replace with a real case"
+    # cipher = ...
+    # dec = symcrypt("-d", cipher, "-o", tmp("out"), "-p", "wrong-password")
+    # assert_status dec, 3 # auth failure
+  end
+end

@@ -38,12 +38,13 @@ APPDIR          := $(PREFIX)/share/applications
 ICONDIR         := $(PREFIX)/share/icons/hicolor/scalable/apps
 METAINFODIR     := $(PREFIX)/share/metainfo
 
-# Extra arguments for `make run`, e.g. `make run ARGS="-e file.txt"`.
+# Extra arguments passed through to `make run` and `make e2e`, e.g.
+# `make run ARGS="-e file.txt"` or `make e2e ARGS="-n /round_trip/"`.
 ARGS ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: all build release check test lint fmt fmt-check ci doc run run-tui run-gtk install install-tui install-gtk uninstall uninstall-tui uninstall-gtk clean help
+.PHONY: all build release check test e2e lint fmt fmt-check ci doc run run-tui run-gtk install install-tui install-gtk uninstall uninstall-tui uninstall-gtk clean help
 
 all: build ## Build the whole workspace (alias for `build`)
 
@@ -58,6 +59,9 @@ check: ## Type-check the workspace without producing binaries
 
 test: ## Run the full test suite
 	$(CARGO) test
+
+e2e: ## Run the end-to-end CLI test suite (tests/e2e); pass ARGS="..."
+	tests/e2e/run.sh $(ARGS)
 
 lint: ## Lint with clippy, treating warnings as errors
 	$(CARGO) clippy --all-targets --all-features -- -D warnings
