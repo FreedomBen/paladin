@@ -9,11 +9,8 @@
 require "test_helper"
 
 class RoundtripTest < E2ETest
-  # A deliberately cheap KDF for cases where crypto cost is irrelevant (here, the
-  # STREAM/round-trip layer). 10000 is PBKDF2's accepted minimum and is still
-  # sub-millisecond. Decrypt reads the KDF from the header, so this is
-  # encrypt-only.
-  FAST_KDF = %w[--kdf pbkdf2 --pbkdf2-iterations 10000].freeze
+  # FAST_KDF (a cheap PBKDF2) is inherited from E2ETest; the size sweep uses it
+  # since the KDF is irrelevant to STREAM correctness.
 
   # Folds in tests/roundtrip_cli.sh: with default settings, encrypt the committed
   # fixture, confirm the ciphertext is slightly larger than the plaintext, then

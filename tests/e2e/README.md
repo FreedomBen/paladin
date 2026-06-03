@@ -56,7 +56,7 @@ SYMCRYPT_BIN=target/release/symcrypt tests/e2e/run.sh   # test a release build
    - `tmp(name)`, `write_input`, `make_input(name, size)`, `make_keyfile`
    - `flip_byte`, `truncate_input` (tamper / truncate cases)
    - `assert_size_grew`, `assert_identical`, `assert_status`
-   - constants: `Symcrypt::LOREM`, `Symcrypt::GOLDEN_DIR`, `DEFAULT_PASSWORD`, `CHUNK`
+   - constants: `Symcrypt::LOREM`, `Symcrypt::GOLDEN_DIR`, `DEFAULT_PASSWORD`, `CHUNK`, `FAST_KDF`
 4. Each test gets a fresh temp dir (`@tmpdir`), removed automatically on teardown.
 
 ## Conventions
@@ -69,11 +69,16 @@ SYMCRYPT_BIN=target/release/symcrypt tests/e2e/run.sh   # test a release build
 
 ## Cases
 
-Implemented: `roundtrip` — `cases/roundtrip_test.rb` folds in the former
-top-level `tests/roundtrip_cli.sh`: round-trip identity across sizes (including
-empty input and the 64 KiB chunk boundary), the ciphertext-grows check, and the
-default `.symcrypt` output name. It uses a cheap KDF for the size sweep and the
-real default Argon2id for the fixture case.
+Implemented:
+
+- `roundtrip` (`cases/roundtrip_test.rb`) — folds in the former top-level
+  `tests/roundtrip_cli.sh`: round-trip identity across sizes (empty input and the
+  64 KiB chunk boundary), the ciphertext-grows check, and the default `.symcrypt`
+  output name. Cheap KDF for the size sweep, real Argon2id for the fixture case.
+- `failures` (`cases/failures_test.rb`) — exit-code matrix: auth failures (wrong
+  password, tampered body, truncated) are indistinguishable at exit 3; unknown
+  format/version reject at exit 4; refuse-to-overwrite, missing input, and
+  usage/option errors at exit 2.
 
 Planned: `cipher · kdf · armor · password_sources · keyfile · streaming ·
-info_verify · clobber_remove · failures (exit-code matrix) · backward_compat`.
+info_verify · remove · backward_compat`.

@@ -41,6 +41,11 @@ class E2ETest < Minitest::Test
   DEFAULT_PASSWORD = "correct horse battery staple"
   CHUNK = 64 * 1024 # core's default STREAM chunk size; handy for boundary inputs
 
+  # A deliberately cheap KDF for cases where crypto cost is irrelevant to what is
+  # under test. 10000 is PBKDF2's accepted minimum and is sub-millisecond; decrypt
+  # reads the KDF from the header, so these flags are encrypt-only.
+  FAST_KDF = %w[--kdf pbkdf2 --pbkdf2-iterations 10000].freeze
+
   def setup
     @tmpdir = Dir.mktmpdir("symcrypt-e2e-")
   end
