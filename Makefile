@@ -42,9 +42,21 @@ METAINFODIR     := $(PREFIX)/share/metainfo
 # `make run ARGS="-e file.txt"` or `make e2e ARGS="-n /round_trip/"`.
 ARGS ?=
 
+# Packaging with nfpm (https://nfpm.goreleaser.com): one .deb and one .rpm per
+# binary. VERSION is read from the workspace manifest; ARCH uses nfpm's Go-style
+# names (amd64, arm64) and is mapped to the right label for each format. Both are
+# exported so the configs in packaging/ can reference them via $${VERSION}/$${ARCH}.
+NFPM        ?= nfpm
+DISTDIR     ?= dist
+ARCH        ?= amd64
+VERSION     := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+PKG_CONFIGS := packaging/nfpm-cli.yaml packaging/nfpm-tui.yaml packaging/nfpm-gtk.yaml
+export VERSION
+export ARCH
+
 .DEFAULT_GOAL := help
 
-.PHONY: all build release check test e2e lint fmt fmt-check ci doc run run-tui run-gtk install install-tui install-gtk uninstall uninstall-tui uninstall-gtk clean help
+.PHONY: all build release check test e2e lint fmt fmt-check ci doc run run-tui run-gtk install install-tui install-gtk uninstall uninstall-tui uninstall-gtk package package-deb package-rpm check-nfpm clean help
 
 all: build ## Build the whole workspace (alias for `build`)
 
@@ -125,8 +137,32 @@ uninstall-gtk: ## Remove the installed symcrypt-gtk binary, .desktop, icon, and 
 	rm -f "$(DESTDIR)$(ICONDIR)/org.symcrypt.Gtk.svg"
 	rm -f "$(DESTDIR)$(METAINFODIR)/org.symcrypt.Gtk.metainfo.xml"
 
-clean: ## Remove build artifacts (cargo clean)
+package: package-deb package-rpm ## Build .deb and .rpm packages for every binary (needs nfpm)
+
+package-deb: release check-nfpm | $(DISTDIR) ## Build the .deb packages into DISTDIR (needs nfpm)
+	@for cfg in $(PKG_CONFIGS); do \
+		echo "  nfpm  $${cfg}  ->  deb"; \
+		$(NFPM) package --config "$${cfg}" --packager deb --target "$(DISTDIR)"; \
+	done
+
+package-rpm: release check-nfpm | $(DISTDIR) ## Build the .rpm packages into DISTDIR (needs nfpm)
+	@for cfg in $(PKG_CONFIGS); do \
+		echo "  nfpm  $${cfg}  ->  rpm"; \
+		$(NFPM) package --config "$${cfg}" --packager rpm --target "$(DISTDIR)"; \
+	done
+
+check-nfpm:
+	@command -v $(NFPM) >/dev/null 2>&1 || { \
+		echo "error: '$(NFPM)' not found on PATH."; \
+		echo "       Install nfpm: https://nfpm.goreleaser.com/install/"; \
+		exit 1; }
+
+$(DISTDIR):
+	mkdir -p "$(DISTDIR)"
+
+clean: ## Remove build artifacts (cargo clean) and built packages
 	$(CARGO) clean
+	rm -rf "$(DISTDIR)"
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "; printf "symcrypt — available targets:\n\n"} \
@@ -134,3 +170,4 @@ help: ## Show this help
 		$(MAKEFILE_LIST)
 	@printf "\nPaths: PREFIX=%s  BINDIR=%s  MAN1DIR=%s\n" "$(PREFIX)" "$(BINDIR)" "$(MAN1DIR)"
 	@printf "       APPDIR=%s\n       ICONDIR=%s\n       METAINFODIR=%s\n" "$(APPDIR)" "$(ICONDIR)" "$(METAINFODIR)"
+	@printf "\nPackaging: VERSION=%s  ARCH=%s  DISTDIR=%s  (needs nfpm)\n" "$(VERSION)" "$(ARCH)" "$(DISTDIR)"

@@ -4,5 +4,8 @@ TODO.md
 # Rust build artifacts
 /target
 
+# Built distribution packages (make package)
+/dist
+
 # Commit serialization lock (see CLAUDE.md)
 commit.lock

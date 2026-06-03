@@ -184,6 +184,39 @@ The matching `make uninstall`, `make uninstall-tui`, and `make uninstall-gtk`
 targets remove them again. The per-front-end usage sections below cover each
 binary in more detail.
 
+### 8. Build distribution packages (.deb / .rpm)
+
+`make package` builds a Debian (`.deb`) and an RPM (`.rpm`) for each front-end
+with [nfpm](https://nfpm.goreleaser.com) — one package per binary, so installing
+the CLI on a headless box never pulls in the GTK stack:
+
+| Package        | Installs                                               | Runtime dependencies |
+| -------------- | ----------------------------------------------------- | -------------------- |
+| `symcrypt`     | `symcrypt` CLI and its man page                       | libc                 |
+| `symcrypt-tui` | `symcrypt-tui` and its man page                       | libc                 |
+| `symcrypt-gtk` | `symcrypt-gtk`, `.desktop` entry, icon, AppStream data | GTK 4, libadwaita    |
+
+First install nfpm (a single Go binary — it is **not** a build dependency of
+symcrypt itself):
+
+```sh
+go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+# or see https://nfpm.goreleaser.com/install/ for apt/dnf/Homebrew/binary downloads
+```
+
+Then build the packages into `dist/`:
+
+```sh
+make package        # .deb and .rpm for all three binaries (six artifacts)
+make package-deb    # only the .deb packages
+make package-rpm    # only the .rpm packages
+```
+
+`VERSION` is read from the workspace `Cargo.toml`. Override the target
+architecture with `ARCH=` (nfpm names — `amd64`, `arm64`) and the output
+directory with `DISTDIR=`; the nfpm configs live in `packaging/`. Building the
+`symcrypt-gtk` package needs the GTK build dependencies from step 2.
+
 ## Command-line usage
 
 Install the `symcrypt` binary with Cargo:
