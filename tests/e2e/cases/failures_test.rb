@@ -141,10 +141,4 @@ class FailuresTest < E2ETest
     assert_status res, 0, "good_cipher setup failed: #{res.stderr}"
     cipher
   end
-
-  def assert_failure(result, code, substr)
-    assert_status result, code
-    assert_includes result.stderr, substr,
-                    "expected stderr to include #{substr.inspect}\nstderr: #{result.stderr}"
-  end
 end

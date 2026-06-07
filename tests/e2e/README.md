@@ -28,7 +28,9 @@ Prefer user-visible behavior over re-proving the fine-grained Rust assertions.
 | `run.sh`                          | Build the CLI (unless `SYMCRYPT_BIN` is set), then run the suite.                |
 | `runner.rb`                       | Pure-Ruby runner: loads every case and lets minitest run them.                   |
 | `test_helper.rb`                  | Base `E2ETest` class: per-test temp dir, the `symcrypt` runner, and assertions.  |
-| `cases/`                          | The test files (`*_test.rb`). Empty for now — fill these in.                     |
+| `cases/`                          | The test files (`*_test.rb`), one per backlog area.                              |
+| `golden_manifest.rb`              | Single source of truth for the backward-compat goldens (password, plaintext, manifest). |
+| `regenerate_goldens.rb`           | Deliberate regenerator for `../fixtures/golden/` (refuses to clobber without `--force`). |
 | `templates/example_test.rb.tmpl`  | Copy-me starting point (not collected as a test).                                |
 | `../fixtures/`                    | Committed inputs (`LOREM_IPSUM.txt`) and `golden/` ciphertexts.                  |
 
@@ -45,7 +47,11 @@ make e2e ARGS="-n /round_trip/"   # filter by test name
 tests/e2e/run.sh                  # build + run everything
 tests/e2e/run.sh -n /round_trip/  # filter by test name (minitest passthrough)
 SYMCRYPT_BIN=target/release/symcrypt tests/e2e/run.sh   # test a release build
+SYMCRYPT_E2E_SLOW=1 tests/e2e/run.sh                    # also run the opt-in slow cases
 ```
+
+The advanced cases (large-file round-trip, SIGINT cancellation) are slow or
+timing-sensitive, so they are skipped unless `SYMCRYPT_E2E_SLOW=1` is set.
 
 ## Adding a case
 
@@ -54,8 +60,8 @@ SYMCRYPT_BIN=target/release/symcrypt tests/e2e/run.sh   # test a release build
 3. Use the provided helpers instead of re-rolling them:
    - `symcrypt(*args, stdin:, env:)` → `Result(status, stdout, stderr)`
    - `tmp(name)`, `write_input`, `make_input(name, size)`, `make_keyfile`
-   - `flip_byte`, `truncate_input` (tamper / truncate cases)
-   - `assert_size_grew`, `assert_identical`, `assert_status`
+   - `flip_byte`, `set_byte`, `truncate_input` (tamper / truncate cases)
+   - `assert_size_grew`, `assert_identical`, `assert_status`, `assert_failure`
    - constants: `Symcrypt::LOREM`, `Symcrypt::GOLDEN_DIR`, `DEFAULT_PASSWORD`, `CHUNK`, `FAST_KDF`
 4. Each test gets a fresh temp dir (`@tmpdir`), removed automatically on teardown.
 
@@ -69,15 +75,35 @@ SYMCRYPT_BIN=target/release/symcrypt tests/e2e/run.sh   # test a release build
 
 ## Cases
 
-Implemented:
+One file per area; see [E2E_TESTS.md](E2E_TESTS.md) for the per-item checklist
+and the behaviors confirmed against the binary.
 
-- `roundtrip` (`cases/roundtrip_test.rb`) — folds in the former top-level
-  `tests/roundtrip_cli.sh`: round-trip identity across sizes (empty input and the
-  64 KiB chunk boundary), the ciphertext-grows check, and the default `.symcrypt`
-  output name. Cheap KDF for the size sweep, real Argon2id for the fixture case.
-- `failures` (`cases/failures_test.rb`) — exit-code matrix: auth failures (wrong
-  password, tampered body, truncated) are indistinguishable at exit 3; unknown
-  format/version reject at exit 4; refuse-to-overwrite, missing input, and
-  usage/option errors at exit 2.
+| File                          | Covers                                                                 |
+| ----------------------------- | --------------------------------------------------------------------- |
+| `roundtrip_test.rb`           | Round-trip identity across sizes (empty + 64 KiB boundary), default `.symcrypt` name. |
+| `failures_test.rb`            | Exit-code matrix: auth (3), format/version (4), usage/overwrite (2).   |
+| `cipher_test.rb`              | Both ciphers, header-driven decrypt, `--info`, invalid name, multi-chunk. |
+| `kdf_test.rb`                 | Each KDF + custom costs, out-of-range/mismatched knobs, `--info` params. |
+| `armor_test.rb`               | Armored round-trip, 7-bit ASCII, banners, default `.asc` name, tamper, leniency. |
+| `password_sources_test.rb`    | `-p` / `--password-file` / `--password-env`, interop, conflicts, unicode. |
+| `keyfile_test.rb`             | password+keyfile, keyfile-only, wrong/missing keyfile, `-k -`, distinct keys. |
+| `streaming_test.rb`           | stdin/stdout pipelines, armored streaming, multi-chunk, `-q` stdout purity. |
+| `info_verify_test.rb`         | `--info` fields / no-write, `--verify` success/tamper/no-write, armored. |
+| `remove_test.rb`              | `--remove` on success vs. preserved on failure; stdin is a usage error. |
+| `io_errors_test.rb`           | Exit 1 paths (missing/read-only out dir, unreadable input); dir input → 2. |
+| `backward_compat_test.rb`     | Decrypt committed goldens (cipher×KDF, armored, stdin) + `--info` lock.  |
+| `misc_test.rb`                | Header authentication / no-downgrade, reserved flags, fresh randomness, help/version. |
+| `advanced_test.rb`            | Opt-in (`SYMCRYPT_E2E_SLOW=1`): large-file round-trip, SIGINT cancellation. |
 
-Planned: see [E2E_TESTS.md](E2E_TESTS.md) for the full backlog and checklist.
+### Backward-compatibility goldens
+
+`backward_compat_test.rb` decrypts committed ciphertexts in `../fixtures/golden/`
+to lock the on-disk format. They are described by `golden_manifest.rb` and
+decrypt to the small `golden/plaintext.txt` with a fixed, documented password.
+Regenerate them deliberately (only after an intended format/defaults change):
+
+```sh
+ruby tests/e2e/regenerate_goldens.rb --force   # --force required to overwrite
+```
+
+See `../fixtures/golden/README.md` for the full procedure.

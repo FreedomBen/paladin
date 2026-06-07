@@ -1,0 +1,9 @@
+symcrypt golden plaintext v1
+
+This small, fixed file is the plaintext behind every ciphertext in
+tests/fixtures/golden/. Decrypting any golden with the documented golden
+password must reproduce these exact bytes — that is how the suite proves a
+newer build still reads containers written by an older one.
+
+Keep this file stable. Changing it invalidates every committed golden and
+forces a deliberate, reviewed regeneration (see README.md in this directory).

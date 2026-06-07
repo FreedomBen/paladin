@@ -108,6 +108,16 @@ class E2ETest < Minitest::Test
     path
   end
 
+  # Set the byte at `offset` to an exact value. Unlike flip_byte (XOR 0xff), this
+  # lets a header field be rewritten to a specific *valid* value — e.g. swapping a
+  # cipher id for another recognized one to prove the header is authenticated.
+  def set_byte(path, offset, value)
+    data = File.binread(path)
+    data.setbyte(offset, value)
+    File.binwrite(path, data)
+    path
+  end
+
   def truncate_input(path, drop_bytes)
     File.truncate(path, File.size(path) - drop_bytes)
     path
@@ -132,5 +142,16 @@ class E2ETest < Minitest::Test
   def assert_status(result, code, msg = nil)
     assert_equal code, result.status,
                  msg || "expected exit #{code}, got #{result.status}\nSTDERR:\n#{result.stderr}"
+  end
+
+  # Assert a failing invocation: the exit code, and (optionally) a stderr
+  # substring. The single status message must stay stable across causes, so most
+  # cases pin the wording too.
+  def assert_failure(result, code, substr = nil)
+    assert_status result, code
+    return if substr.nil?
+
+    assert_includes result.stderr, substr,
+                    "expected stderr to include #{substr.inspect}\nstderr: #{result.stderr}"
   end
 end
