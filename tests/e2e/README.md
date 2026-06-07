@@ -80,5 +80,4 @@ Implemented:
   format/version reject at exit 4; refuse-to-overwrite, missing input, and
   usage/option errors at exit 2.
 
-Planned: `cipher · kdf · armor · password_sources · keyfile · streaming ·
-info_verify · remove · backward_compat`.
+Planned: see [E2E_TESTS.md](E2E_TESTS.md) for the full backlog and checklist.
