@@ -49,7 +49,7 @@ kind of metadata and that the default decrypt-output path can strip `.aes`.
 9. [DESIGN.md updates required](#9-designmd-updates-required)
 10. [Dependencies to add](#10-dependencies-to-add)
 11. [Testing strategy & known-answer vectors](#11-testing-strategy--known-answer-vectors)
-12. [Open decisions](#12-open-decisions)
+12. [Decisions](#12-decisions)
 13. [Master checklist](#13-master-checklist)
 
 ---
@@ -61,7 +61,7 @@ kind of metadata and that the default decrypt-output path can strip `.aes`.
 - **Read interop.** Decrypt, verify, and inspect AES Crypt **version 2** files
   (the format the reference tool has written for years), and version 1 (same
   layout minus the extensions block). Version 0 is an optional stretch
-  ([§12](#12-open-decisions)).
+  ([§12](#12-decisions)).
 - **One core, thin front-ends — unchanged.** All format detection, KDF, and
   HMAC/CBC logic lives in `symcrypt-core`. Front-ends gain no crypto or format
   knowledge; `decrypt`/`verify` keep the *same signatures* and "just work" on a
@@ -256,10 +256,10 @@ audited symcrypt primitives with the legacy format.
   already `#[non_exhaustive]`, so this is additive.
 - Reuse existing variants everywhere else:
   - bad/short `"AES"` header, bad extension framing, out-of-range lengths,
-    non-multiple-of-16 body, bad `fsmod` → `MalformedHeader(&'static str)` (exit 4);
-  - any HMAC mismatch, a body too short to hold the trailer, a structurally
-    short final block → `Auth` (exit 3) — never distinguished from a wrong
-    password (DESIGN §4.4);
+    bad `fsmod` → `MalformedHeader(&'static str)` (exit 4);
+  - any HMAC mismatch, a body too short to hold the trailer, or a ciphertext
+    run not a multiple of 16 → `Auth` (exit 3) — never distinguished from a
+    wrong password (DESIGN §4.4);
   - keyfile-present / password-absent against a `.aes` file → `InvalidOptions`
     (exit 2);
   - plaintext over 64 GiB → `InputTooLarge` (exit 1);
@@ -282,9 +282,11 @@ impl Secret {
 ```
 
 The `aescrypt` decryptor rejects `secret.has_keyfile()` and an empty
-`password_bytes()` with `InvalidOptions` before deriving (implication #8).
-**Test:** keyfile-bearing or password-less `Secret` against a fixture `.aes`
-returns `InvalidOptions`.
+`password_bytes()` with `InvalidOptions` before deriving (implication #8). A
+`.aes` file written with a genuinely empty password is therefore unreadable by
+symcrypt — a documented limitation; the reference tool does not produce such
+files. **Test:** keyfile-bearing or password-less `Secret` against a fixture
+`.aes` returns `InvalidOptions`.
 
 ### 5.4 Format detection (`format.rs`)
 
@@ -318,16 +320,22 @@ Single streaming routine shared by decrypt (writes plaintext) and verify
 5. **Unwrap keys:** AES-256-CBC-decrypt `enc_keys` with (`key1`, `iv1`) → `iv2`,
    `key2` (zeroized). Build the body HMAC `HMAC-SHA256(key2, …)`.
 6. **Stream the body with a 33-byte trailer buffer** (§5.7): maintain a rolling
-   buffer; emit complete 16-byte CBC blocks while ≥ `16 + 33` bytes remain
-   unconsumed, feeding each emitted ciphertext block to `hmac2` and CBC-decrypting
-   it with `key2`/chaining IV. Enforce the 64 GiB plaintext cap from bytes
-   actually produced. Report `on_progress` per block and observe cancellation.
-7. **At EOF:** the retained 33 bytes are `fsmod ‖ hmac2`. Require the consumed
-   body to be a multiple of 16; validate `fsmod` (§4, implications #3). Apply
-   `fsmod` to the final block (keep `fsmod` bytes when non-zero; keep the whole
-   block when zero; the empty-body case yields empty plaintext). Hold back the
-   final block's emission until after the MAC check is reasonable but not
-   required given temp-file finalization — **verify `hmac2` before returning
+   buffer and treat only the bytes *before* the trailing 33 as ciphertext,
+   emitting them as complete 16-byte blocks — feeding each ciphertext block to
+   `hmac2` and CBC-decrypting it with `key2`/chaining IV. **Defer each block's
+   plaintext write by one block** (hold the most recently decrypted block back):
+   the final ciphertext block needs `fsmod` truncation and which block is final
+   isn't known until EOF. Enforce the 64 GiB plaintext cap from bytes actually
+   produced. Report `on_progress` per block and observe cancellation.
+7. **At EOF:** the retained 33 bytes are `fsmod ‖ hmac2`, and the held-back
+   block is the final ciphertext block. Require the consumed body to be a
+   multiple of 16; validate `fsmod` (§4, implication #3). Apply `fsmod` to that
+   final block (keep `fsmod` bytes when non-zero; keep the whole block when zero;
+   an empty body yields empty plaintext) and write it. Deferring the final block
+   is **required** — the core's `Write` is not seekable, so `fsmod` truncation
+   cannot be undone after the bytes are written (notably for `-o -`); deferring
+   *all* plaintext until the MAC check is also sound but unnecessary given
+   temp-file finalization. **Verify `hmac2` with `verify_slice` before returning
    `Ok`** regardless (implication #4).
 8. **Verify `hmac2`** with `verify_slice` → `Auth` on mismatch.
 
@@ -347,8 +355,11 @@ Single streaming routine shared by decrypt (writes plaintext) and verify
 The body is `ciphertext ‖ fsmod(1) ‖ hmac2(32)` with no stored length. To find
 where ciphertext ends without a second pass, keep the most recent 33 bytes
 buffered and only treat earlier bytes as ciphertext. When the stream ends, the
-buffer holds exactly the trailer. Fewer than 33 trailing bytes total, or a
-ciphertext run not divisible by 16, is `Auth` (truncation is indistinguishable
+buffer holds exactly the trailer. Separately, hold the most recently *decrypted*
+block's plaintext back by one block so `fsmod` can truncate the final block
+before it is written (§5.5 step 6–7) — the core's `Write` is not seekable, so a
+write cannot be taken back. Fewer than 33 trailing bytes total, or a ciphertext
+run not divisible by 16, is `Auth` (truncation is indistinguishable
 from tampering, DESIGN §5.5). Unit-test the boundary at body sizes
 `0, 16, 16±(within a block), several blocks`.
 
@@ -412,7 +423,7 @@ files once the core dispatches. The concrete edits:
 | Decrypt default output | `src/run.rs` (`run_decrypt`, ~L109–116) | The no-`-o` branch already peeks `core::inspect`. Match the new `Metadata`: `Symcrypt(h)` → `default_decrypt_output(input, &h)` (today's call); `AesCrypt(_)` → `default_aescrypt_output(input)`. |
 | Info rendering | `src/info.rs` (`format_info`) | Take `&Metadata` and branch: existing 12-line symcrypt block, or the §5.8 AES Crypt block. Keep both stable and test byte-exact. |
 | Info dispatch | `src/run.rs` (`run_info`, ~L165) | `core::inspect` now returns `Metadata`; pass it to `info::format_info`. |
-| Friendlier keyfile error (optional) | `src/run.rs` / `src/secret.rs` | On decrypt-without-`-o` we already know the format from the peek; if `AesCrypt` and `-k` was supplied, fail early with a clear "AES Crypt files don't use keyfiles" usage message *before prompting*. The core `InvalidOptions` backstop still covers the `-o`-supplied path. |
+| Friendlier keyfile error | `src/run.rs` / `src/secret.rs` | On decrypt-without-`-o` we already know the format from the peek; if `AesCrypt` and `-k` was supplied, fail early with a clear "AES Crypt files don't use keyfiles" usage message *before prompting*. The core `InvalidOptions` backstop still covers the `-o`-supplied path. |
 | Help / docs | `src/cli.rs` help text, man page, README | Note that `-d`/`--verify`/`-i` auto-detect AES Crypt (`.aes`) files, that encryption always uses symcrypt's format, and recommend re-encrypting decrypted data (implication #1). |
 
 **Integration tests** (`tests/cli.rs`, `assert_cmd` + a committed `.aes`
@@ -548,7 +559,7 @@ sizes above (exercises the trailer buffer, `fsmod`, empty body, multi-block).
 - `version` byte unsupported → `UnsupportedAesCryptVersion`.
 - Extension framing overruns / exceeds the size or count bound →
   `MalformedHeader`.
-- `fsmod ≥ 16`, or `fsmod ≠ 0` with zero body blocks → `MalformedHeader`/`Auth`.
+- `fsmod ≥ 16`, or `fsmod ≠ 0` with zero body blocks → `MalformedHeader`.
 - Header truncated mid-field → `MalformedHeader`.
 
 **Usage (→ exit 2):** keyfile-bearing or password-less `Secret` against a `.aes`
@@ -564,23 +575,26 @@ file → `InvalidOptions`.
 
 ---
 
-## 12. Open decisions
+## 12. Decisions
 
-- **Version 0 support — default: defer.** v1/v2 cover essentially all real files;
-  v0 adds a separate single-key path and is hard to KAT (no modern writer). Ship
+Resolved 2026-06-07.
+
+- **Version 0 support — deferred.** v1/v2 cover essentially all real files; v0
+  adds a separate single-key path and is hard to KAT (no modern writer). Ship
   v1/v2 first; add v0 only if a concrete need appears (§2.4).
-- **`inspect` enum vs. lower-churn alternative — recommend the enum.** Widening
-  `inspect` to `Metadata` is the one breaking change; it touches the CLI/TUI/GTK
-  info renderers and a few app call sites (all enumerated in §6–§8). The
-  alternative — a separate `inspect_aescrypt` plus a format probe — only moves
-  the churn and forces front-ends to detect the format themselves, violating the
-  thin-front-end rule. The enum keeps detection in core.
-- **`--info` `cipher`/`kdf` labels for AES Crypt.** Proposed `aes-256-cbc` /
-  `aescrypt-sha256`. These are display-only strings (not the symcrypt
-  `CipherId`/`KdfId` enums) and won't be accepted by `-c`/`--kdf`. Confirm the
-  spellings.
-- **Friendlier pre-prompt keyfile rejection in the CLI** (§6) is optional polish;
-  the core `InvalidOptions` backstop is the contract.
+- **`inspect` returns the `Metadata` enum.** Widening `inspect` to `Metadata` is
+  the one breaking change; it touches the CLI/TUI/GTK info renderers and a few
+  app call sites (all enumerated in §6–§8). The rejected alternative — a separate
+  `inspect_aescrypt` plus a format probe — only moves the churn and forces
+  front-ends to detect the format themselves, violating the thin-front-end rule.
+  The enum keeps detection in core.
+- **`--info` `cipher`/`kdf` labels — confirmed `aes-256-cbc` / `aescrypt-sha256`.**
+  These are display-only strings (not the symcrypt `CipherId`/`KdfId` enums) and
+  won't be accepted by `-c`/`--kdf`.
+- **Friendlier pre-prompt keyfile rejection in the CLI (§6) — included.** When a
+  decrypt peek detects an AES Crypt input and `-k` was supplied, fail early with a
+  clear usage message before prompting; the core `InvalidOptions` backstop remains
+  the contract for the `-o`-supplied path.
 
 ---
 
@@ -603,20 +617,20 @@ file → `InvalidOptions`.
 **CLI (`symcrypt`)**
 - [ ] `info.rs`: `format_info(&Metadata)` renders both formats (byte-exact).
 - [ ] `run.rs`: `run_info`/`run_decrypt` consume `Metadata`; AES Crypt default output.
-- [ ] (Optional) pre-prompt keyfile rejection for detected `.aes`.
+- [ ] Pre-prompt keyfile rejection for detected `.aes` (§6).
 - [ ] Help/man/README: auto-detect note + re-encrypt recommendation.
 - [ ] `assert_cmd` suite over a committed `.aes` fixture (§6).
 
 **TUI (`symcrypt-tui`)**
 - [ ] `info.rs`: `format_info(&Metadata)`; AES Crypt rows.
-- [ ] `app.rs`: inline-inspect (~L498) and decrypt prefill (~L718) consume `Metadata`.
+- [ ] `app.rs`: inline-inspect (~L498) and decrypt prefill (~L720) consume `Metadata`.
 - [ ] Info unit test + inline-inspect app test for an AES Crypt fixture.
 
 **GTK (`symcrypt-gtk`)**
 - [ ] `info.rs`: rows/text accept `&Metadata`; AES Crypt rows.
-- [ ] `app.rs`: `inspect_path`/`open_and_inspect` return `Metadata`; update 4 call sites; decrypt prefill.
+- [ ] `app.rs`: `inspect_path`/`open_and_inspect` return `Metadata`; update 3 call sites; decrypt prefill.
 - [ ] `info.rs` unit tests for an AES Crypt fixture; manual UI spot-check.
 
 **Docs**
 - [ ] DESIGN.md updated per [§9](#9-designmd-updates-required).
-- [ ] Security implications ([§4](#4-security-implications-confirm-before-implementing)) confirmed with the user before implementation.
+- [x] Security implications ([§4](#4-security-implications-confirm-before-implementing)) confirmed with the user (2026-06-07).
