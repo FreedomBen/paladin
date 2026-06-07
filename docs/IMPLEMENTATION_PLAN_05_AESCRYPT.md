@@ -105,7 +105,7 @@ authoritative external spec is the AES Crypt "format" document.
 | …                          | 16         | `iv1`                | IV for the key-wrap layer; also seeds the KDF.                   |
 | …                          | 48         | `enc_keys`           | `AES-256-CBC(key1, iv1, iv2 ‖ key2)` — 16-byte `iv2` + 32-byte `key2`. |
 | …                          | 32         | `hmac1`              | `HMAC-SHA256(key1, enc_keys)`.                                   |
-| …                          | `N`·16     | `ciphertext`         | `AES-256-CBC(key2, iv2, plaintext padded to a 16-byte boundary)`. `N` ≥ 0. |
+| …                          | `N`·16     | `ciphertext`         | `AES-256-CBC(key2, iv2, plaintext padded to a 16-byte boundary)`. `N` ≥ 0; padding bytes are ignored on read. |
 | …                          | 1          | `fsmod`              | Original plaintext length **mod 16** (`0..=15`); `0` means a full final block when ciphertext exists. |
 | …                          | 32         | `hmac2`              | `HMAC-SHA256(key2, ciphertext)`.                                 |
 
@@ -198,7 +198,7 @@ final HMAC. Supporting it is cheap but its test vectors are harder to source
 
 ## 3. Design: where the work lives
 
-### 3.1 Format detection & dispatch (the only public-API change)
+### 3.1 Format detection & dispatch
 
 After armor is stripped (an AES Crypt file is binary and passes
 `armor::auto_dearmor` through untouched), the core peeks the leading bytes and
@@ -394,12 +394,14 @@ Single streaming routine shared by decrypt (writes plaintext) and verify
    implication #3), then write `fsmod` bytes from the final block when
    `fsmod != 0`, or all 16 bytes when `fsmod == 0` and at least one ciphertext
    block was present. If there were no ciphertext blocks, require `fsmod == 0`
-   and write nothing. For v3, remove PKCS#7 padding from the final block after
-   `hmac2` verification; invalid padding returns `Auth`. Deferring the final
-   block is **required** — the core's `Write` is not seekable, so final-block
-   truncation/unpadding cannot be undone after the bytes are written (notably
-   for `-o -`); deferring *all* plaintext until the MAC check is also sound but
-   unnecessary given temp-file finalization.
+   and write nothing. Do not validate v1/v2 padding byte values; the legacy
+   format only stores `fsmod`, and non-PKCS#7 final-block filler must not become
+   a compatibility failure. For v3, remove PKCS#7 padding from the final block
+   after `hmac2` verification; invalid padding returns `Auth`. Deferring the
+   final block is **required** — the core's `Write` is not seekable, so
+   final-block truncation/unpadding cannot be undone after the bytes are written
+   (notably for `-o -`); deferring *all* plaintext until the MAC check is also
+   sound but unnecessary given temp-file finalization.
 
 `verify` runs the identical path with a sink that discards writes.
 
@@ -500,7 +502,7 @@ files once the core dispatches. The concrete edits:
 | Decrypt default output | `crates/symcrypt-cli/src/run.rs` (`run_decrypt`, ~L109–116) | The no-`-o` branch already peeks `core::inspect`. Match the new `Metadata`: `Symcrypt(h)` → `default_decrypt_output(input, &h)` (today's call); `AesCrypt(_)` → `default_aescrypt_output(input)`. |
 | Info rendering | `crates/symcrypt-cli/src/info.rs` (`format_info`) | Take `&Metadata` and branch: existing 12-line symcrypt block, or the §5.8 AES Crypt block. Keep both stable and test byte-exact for v1/v2/v3. |
 | Info dispatch | `crates/symcrypt-cli/src/run.rs` (`run_info`, ~L165) | `core::inspect` now returns `Metadata`; pass it to `info::format_info`. |
-| Friendlier keyfile error | `crates/symcrypt-cli/src/run.rs` / `crates/symcrypt-cli/src/secret.rs` | For non-stdin `decrypt` and `verify`, if `-k` or `--no-password` was supplied, inspect the input before prompting; if it is `AesCrypt`, fail early with a clear "AES Crypt files don't use symcrypt keyfiles; use a UTF-8 --password-file for compatible AES Crypt key files" usage message. The decrypt-without-`-o` path reuses the existing metadata peek; decrypt-with-`-o` and verify open/inspect/reopen before prompting. Stdin inputs keep the core `InvalidOptions` backstop because pre-inspection would require buffering the stream. |
+| Friendlier keyfile error | `crates/symcrypt-cli/src/run.rs` / `crates/symcrypt-cli/src/secret.rs` | For non-stdin `decrypt` and `verify`, if `-k` or `--no-password` was supplied, inspect the input before reading the keyfile or prompting; if it is `AesCrypt`, fail early with a clear "AES Crypt files don't use symcrypt keyfiles; use a UTF-8 --password-file for compatible AES Crypt key files" usage message. The decrypt-without-`-o` path reuses the existing metadata peek; decrypt-with-`-o` and verify open/inspect/reopen before secret resolution. Stdin inputs keep the core `InvalidOptions` backstop because pre-inspection would require buffering the stream. |
 | Help / docs | `crates/symcrypt-cli/src/cli.rs` help text, man page, README | Note that `-d`/`--verify`/`-i` auto-detect AES Crypt (`.aes`) files, that encryption always uses symcrypt's format, that AES Crypt key files may be passed as `--password-file` only when they are UTF-8 text, and recommend re-encrypting decrypted data (implication #1). |
 
 **Integration tests** (`tests/cli.rs`, `assert_cmd` + a committed `.aes`
@@ -531,7 +533,7 @@ return type.
 | ---- | ---- | ------ |
 | Info rendering | `crates/symcrypt-tui/src/info.rs` (`format_info(&Header) -> Vec<String>`) | Change to `format_info(&Metadata)` and branch to symcrypt vs AES Crypt rows (§5.8). |
 | Inline inspect | `crates/symcrypt-tui/src/app.rs` (~L498–503) | `core::inspect(&mut r)` now yields `Metadata`; pass to `format_info`. |
-| Decrypt prefill | `crates/symcrypt-tui/src/app.rs` (`sync_paths`, Decrypt branch ~L720–726) | The branch inspects to prefill the output name; match `Metadata`: `Symcrypt(h)` → `default_decrypt_output`; `AesCrypt(_)` → `default_aescrypt_output`. The current `Err(_)` → "not a symcrypt file" fallback now fires only for genuinely unrecognized inputs (a `.aes` file inspects successfully). |
+| Decrypt prefill | `crates/symcrypt-tui/src/app.rs` (`sync_paths`, Decrypt branch ~L720–726) | The branch inspects to prefill the output name; match `Metadata`: `Symcrypt(h)` → `default_decrypt_output`; `AesCrypt(_)` → `default_aescrypt_output`. Update the current `Err(_)` fallback to format-neutral wording such as "not a recognized symcrypt or AES Crypt file; enter the output path"; it now fires only for genuinely unrecognized inputs (a `.aes` file inspects successfully). |
 | Keyfile field | (no code change) | A keyfile + a `.aes` file surfaces the core `InvalidOptions` as the existing error status; document it. Optionally disable the keyfile field once Info reveals an AES Crypt input — a nicety, not required. |
 
 **Tests:** extend the existing `info.rs` unit test so `format_info` renders an
@@ -554,11 +556,13 @@ consume the new `Metadata`.
 | Inspect helpers | `crates/symcrypt-gtk/src/app.rs` (`inspect_path` ~L252, `open_and_inspect` ~L1034) | Return `Result<Metadata, …>` instead of `Result<Header, …>`; update the three call sites (decrypt prefill ~L238–240, info prefill ~L266–267, Run/Info ~L929–930). |
 | Decrypt prefill | `crates/symcrypt-gtk/src/app.rs` (`refresh_output`, ~L238–240) | Match `Metadata`: `Symcrypt(h)` → `default_decrypt_output(&input, &h)`; `AesCrypt(_)` → `default_aescrypt_output(&input)`. |
 | Info text | `crates/symcrypt-gtk/src/app.rs` (~L267, ~L930) | `info::header_text` → `info::metadata_text(&meta)`. |
+| Error messages | `crates/symcrypt-gtk/src/message.rs` | GTK renders `SymError` through its own message mapper, so update `BadMagic` to the format-neutral wording and add an explicit `UnsupportedAesCryptVersion` message/test instead of letting it fall through to the generic future-variant text. |
 | Keyfile chooser | (no code change) | Core `InvalidOptions` is surfaced via the existing toast/error dialog; drag-and-drop of a `.aes` file decrypts normally. |
 
 **Tests:** the `info.rs` unit tests (pure, no display) gain AES Crypt cases
-(build `Metadata` by inspecting committed `.aes` bytes; assert rows/text). GTK UI
-behavior stays on manual verification plus the shared core tests (DESIGN §10).
+(build `Metadata` by inspecting committed `.aes` bytes; assert rows/text), and
+`message.rs` covers the new/updated AES Crypt error messages. GTK UI behavior
+stays on manual verification plus the shared core tests (DESIGN §10).
 
 ---
 
@@ -689,8 +693,9 @@ Resolved 2026-06-07.
   accepted by `-c`/`--kdf`.
 - **Friendlier pre-prompt keyfile rejection in the CLI (§6) — included.** For
   non-stdin `decrypt` and `verify`, if `-k` or `--no-password` was supplied,
-  inspect before prompting and fail early with a clear usage message when the
-  input is AES Crypt. Stdin inputs keep the core `InvalidOptions` backstop.
+  inspect before reading keyfile material or prompting and fail early with a
+  clear usage message when the input is AES Crypt. Stdin inputs keep the core
+  `InvalidOptions` backstop.
 - **AES Crypt password files — UTF-8 only.** AES Crypt key files may be supplied
   as `--password-file` only when they are UTF-8 text after the existing
   one-trailing-newline trim. UTF-16/BOM AES Crypt key files and byte-exact
@@ -724,12 +729,13 @@ Resolved 2026-06-07.
 
 **TUI (`symcrypt-tui`)**
 - [ ] `info.rs`: `format_info(&Metadata)`; AES Crypt rows.
-- [ ] `app.rs`: inline-inspect (~L498) and decrypt prefill (~L720) consume `Metadata`.
+- [ ] `app.rs`: inline-inspect (~L498) and decrypt prefill (~L720) consume `Metadata`; decrypt-prefill fallback is format-neutral.
 - [ ] Info unit test + inline-inspect app test for AES Crypt v2/v3 fixtures.
 
 **GTK (`symcrypt-gtk`)**
 - [ ] `info.rs`: rows/text accept `&Metadata`; AES Crypt rows.
 - [ ] `app.rs`: `inspect_path`/`open_and_inspect` return `Metadata`; update 3 call sites; decrypt prefill.
+- [ ] `message.rs`: format-neutral `BadMagic`; explicit `UnsupportedAesCryptVersion` message (+ tests).
 - [ ] `info.rs` unit tests for AES Crypt v2/v3 fixtures; manual UI spot-check.
 
 **Docs**
