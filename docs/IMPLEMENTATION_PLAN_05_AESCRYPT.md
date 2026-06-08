@@ -1,10 +1,12 @@
 # symcrypt — Implementation plan 05: AES Crypt read support
 
-**Status:** Proposed. Adds **decryption, verification, and inspection of foreign
-[AES Crypt](https://www.aescrypt.com/) (`.aes`) files** to the existing core and
-all three front-ends. Encryption to the AES Crypt format is **out of scope** —
-symcrypt only ever *writes* its own container (DESIGN §5).
-**Last updated:** 2026-06-07.
+**Status:** **Implemented for Stream Format 1 and 2** across the core and all
+three front-ends; **Stream Format 3 is deferred** (see [§12](#12-decisions)).
+Adds **decryption, verification, and inspection of foreign
+[AES Crypt](https://www.aescrypt.com/) (`.aes`) files**. Encryption to the AES
+Crypt format is **out of scope** — symcrypt only ever *writes* its own container
+(DESIGN §5).
+**Last updated:** 2026-06-08.
 
 **Scope.** Teach `symcrypt-core` to recognize an AES Crypt container, derive its
 key with the AES Crypt KDFs, verify its HMACs, and stream out the plaintext, so
@@ -58,9 +60,11 @@ kind of metadata and that the default decrypt-output path can strip `.aes`.
 
 ### Goals
 
-- **Read interop.** Decrypt, verify, and inspect AES Crypt **Stream Format 3**
-  files (current AES Crypt 4.x output), plus Stream Format 2 and Stream Format 1
-  files. Version 0 is an optional stretch ([§12](#12-decisions)).
+- **Read interop.** Decrypt, verify, and inspect AES Crypt **Stream Format 1 and
+  2** files (**implemented**). **Stream Format 3** (current AES Crypt 4.x output)
+  is **deferred** until its KDF salt can be pinned from a real v3 fixture
+  ([§12](#12-decisions)); a v3 file is rejected as `UnsupportedAesCryptVersion`.
+  Version 0 is an optional stretch ([§12](#12-decisions)).
 - **One core, thin front-ends — unchanged.** All format detection, KDF, and
   HMAC/CBC logic lives in `symcrypt-core`. Front-ends gain no crypto or format
   knowledge; `decrypt`/`verify` keep the *same signatures* and "just work" on a
@@ -696,9 +700,15 @@ sizes above (exercises the trailer buffer, `fsmod`, empty body, multi-block).
 Resolved 2026-06-07; v3 KDF-salt, `inspect`-bound, and iteration-ceiling
 clarifications added 2026-06-08.
 
-- **Version 3 support — included.** v3 is required because current AES Crypt 4.x
-  writes Stream Format 3. It adds PBKDF2-HMAC-SHA512, a bounded unauthenticated
-  iteration count, `hmac1` over `enc_keys ‖ 0x03`, and PKCS#7 body padding.
+- **Version 3 support — deferred (revised 2026-06-08).** v3 was planned as
+  required (current AES Crypt 4.x writes Stream Format 3), but the only AES Crypt
+  tool available to mint fixtures (`aescrypt 3.16.1`) writes Stream Format 2, and
+  the v3 PBKDF2 salt is not stated in the public spec — so v3 body code cannot be
+  written until its salt is pinned from a real v3 fixture (the gate below). v1/v2
+  ship now with genuine fixtures; v3 (PBKDF2-HMAC-SHA512, a bounded unauthenticated
+  iteration count, `hmac1` over `enc_keys ‖ 0x03`, PKCS#7 body padding) is rejected
+  as `UnsupportedAesCryptVersion` until a v3 fixture or v3-capable tool is
+  available. The v1/v2 design below is structured so v3 slots in without rework.
 - **Version 0 support — deferred.** v1/v2/v3 cover the targeted real-world
   interoperability set; v0 adds a separate single-key path and is hard to KAT
   (no modern writer). Add v0 only if a concrete need appears (§2.5).
@@ -737,38 +747,41 @@ clarifications added 2026-06-08.
 
 ## 13. Master checklist
 
+Checked items are done for **Stream Format 1 and 2**; sub-parts marked
+*(v3 deferred)* land with Stream Format 3 ([§12](#12-decisions)).
+
 **Core (`symcrypt-core`)**
-- [ ] Add `aes`, `cbc`, `hmac` deps; pin in `Cargo.lock` (mind the `digest`/`cipher` split, §10).
-- [ ] `error.rs`: add `UnsupportedAesCryptVersion(u8)`; update `BadMagic` display/docs; `common::exit_code` maps the AES version variant to 4 (+ test).
-- [ ] `secret.rs`: add `pub(crate) password_bytes()`; reject keyfile/empty-password for AES Crypt.
-- [ ] `format.rs`: `detect` peeks magic and re-chains the reader (+ tests).
-- [ ] `aescrypt.rs`: header + extension parse with bounds; v3 iteration bound (§5.6).
-- [ ] `aescrypt.rs`: v1/v2 SHA-256 KDF and v3 PBKDF2-HMAC-SHA512 KDF with locked vectors.
-- [ ] `aescrypt.rs`: verify `hmac1` (constant-time; v3 input includes `0x03`) → unwrap `iv2`/`key2`.
-- [ ] `aescrypt.rs`: body stream w/ version-specific trailer buffer, `fsmod`/PKCS#7, `hmac2`, 64 GiB cap, cancellation.
-- [ ] `aescrypt.rs`: `inspect` → `AesCryptHeader`; sanitized `CREATED_BY`; v3 `kdf_iterations`.
-- [ ] `lib.rs`: `decrypt`/`verify`/`inspect` dispatch by `Format`; export `Metadata`/`AesCryptHeader`; update core tests.
-- [ ] `paths.rs`: `default_aescrypt_output` + `.aes` in the shared suffix set (+ tests).
-- [ ] Full KAT + tamper + format + usage + cap tests (§11); `fmt`/`clippy` clean.
+- [x] Add `aes`, `cbc`, `hmac` deps (`aes 0.8` / `cbc 0.1` / `hmac 0.13`, no new `digest`/`cipher` generation); pinned in `Cargo.lock`.
+- [x] `error.rs`: add `UnsupportedAesCryptVersion(u8)`; update `BadMagic` display/docs; `common::exit_code` maps the AES version variant to 4 (+ test).
+- [x] `secret.rs`: add `pub(crate) password_bytes()`; reject keyfile/empty-password for AES Crypt.
+- [x] `format.rs`: `detect` peeks magic and re-chains the reader (+ tests).
+- [x] `aescrypt.rs`: header + extension parse with bounds. *(v3 iteration bound deferred.)*
+- [x] `aescrypt.rs`: v1/v2 SHA-256 KDF with an independently-derived locked vector. *(v3 PBKDF2-HMAC-SHA512 deferred.)*
+- [x] `aescrypt.rs`: verify `hmac1` (constant-time) → unwrap `iv2`/`key2`. *(v3 `enc_keys ‖ 0x03` input deferred.)*
+- [x] `aescrypt.rs`: body stream w/ 33-byte trailer buffer, `fsmod`, `hmac2`, 64 GiB cap, cancellation. *(v3 32-byte trailer + PKCS#7 deferred.)*
+- [x] `aescrypt.rs`: `inspect` → `AesCryptHeader`; sanitized `CREATED_BY`. *(v3 `kdf_iterations` deferred.)*
+- [x] `lib.rs`: `decrypt`/`verify`/`inspect` dispatch by `Format`; export `Metadata`/`AesCryptHeader`; update core tests.
+- [x] `paths.rs`: `default_aescrypt_output` + `.aes` in the shared suffix set (+ tests).
+- [x] Full KAT + tamper + format + usage + cap tests (§11); `fmt`/`clippy` clean.
 
 **CLI (`symcrypt`)**
-- [ ] `info.rs`: `format_info(&Metadata)` renders both formats (byte-exact).
-- [ ] `run.rs`: `run_info`/`run_decrypt` consume `Metadata`; AES Crypt default output.
-- [ ] Pre-prompt keyfile / `--no-password` rejection for non-stdin AES Crypt decrypt/verify (§6).
-- [ ] Help/man/README: auto-detect note + UTF-8 AES password-file note + re-encrypt recommendation.
-- [ ] `assert_cmd` suite over committed v1/v2/v3 `.aes` fixtures (§6).
+- [x] `info.rs`: `format_info(&Metadata)` renders both formats (byte-exact).
+- [x] `run.rs`: `run_info`/`run_decrypt` consume `Metadata`; AES Crypt default output.
+- [x] Pre-prompt keyfile / `--no-password` rejection for non-stdin AES Crypt decrypt/verify (§6).
+- [x] Help/man/README: auto-detect note + UTF-8 AES password-file note + re-encrypt recommendation.
+- [x] `assert_cmd` suite over committed v1/v2 `.aes` fixtures (§6). *(v3 fixtures deferred.)*
 
 **TUI (`symcrypt-tui`)**
-- [ ] `info.rs`: `format_info(&Metadata)`; AES Crypt rows.
-- [ ] `app.rs`: inline-inspect (~L498) and decrypt prefill (~L720) consume `Metadata`; decrypt-prefill fallback is format-neutral.
-- [ ] Info unit test + inline-inspect app test for AES Crypt v2/v3 fixtures.
+- [x] `info.rs`: `format_info(&Metadata)`; AES Crypt rows.
+- [x] `app.rs`: inline-inspect and decrypt prefill consume `Metadata`; decrypt-prefill fallback is format-neutral.
+- [x] Info unit test + inline-inspect app test for AES Crypt v2 fixtures.
 
 **GTK (`symcrypt-gtk`)**
-- [ ] `info.rs`: rows/text accept `&Metadata`; AES Crypt rows.
-- [ ] `app.rs`: `inspect_path`/`open_and_inspect` return `Metadata`; update 3 call sites; decrypt prefill.
-- [ ] `message.rs`: format-neutral `BadMagic`; explicit `UnsupportedAesCryptVersion` message (+ tests).
-- [ ] `info.rs` unit tests for AES Crypt v2/v3 fixtures; manual UI spot-check.
+- [x] `info.rs`: rows/text accept `&Metadata`; AES Crypt rows.
+- [x] `app.rs`: `inspect_path`/`open_and_inspect` return `Metadata`; update 3 call sites; decrypt prefill.
+- [x] `message.rs`: format-neutral `BadMagic`; explicit `UnsupportedAesCryptVersion` message (+ tests).
+- [x] `info.rs` unit tests for AES Crypt v2 fixtures; manual UI spot-check still pending.
 
 **Docs**
-- [ ] DESIGN.md updated per [§9](#9-designmd-updates-required).
-- [ ] Security implications ([§4](#4-security-implications-confirm-before-implementing)), including v3 additions, confirmed with the user before implementation.
+- [x] DESIGN.md updated per [§9](#9-designmd-updates-required).
+- [x] Security implications ([§4](#4-security-implications-confirm-before-implementing)) confirmed with the user before implementation (v3 deferred as part of that discussion).

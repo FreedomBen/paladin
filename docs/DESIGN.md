@@ -85,7 +85,8 @@ symcrypt/
 │   ├── IMPLEMENTATION_PLAN_01_CORE.md   # per-component implementation plans
 │   ├── IMPLEMENTATION_PLAN_02_CLI.md
 │   ├── IMPLEMENTATION_PLAN_03_TUI.md
-│   └── IMPLEMENTATION_PLAN_04_GTK.md
+│   ├── IMPLEMENTATION_PLAN_04_GTK.md
+│   └── IMPLEMENTATION_PLAN_05_AESCRYPT.md  # AES Crypt read interop
 └── crates/
     ├── symcrypt-core/         # library — ALL crypto, format, streaming, pure helpers
     │   ├── src/
@@ -97,6 +98,8 @@ symcrypt/
     │   │   ├── cipher.rs       # AEAD dispatch (AES-256-GCM, ChaCha20-Poly1305)
     │   │   ├── stream.rs       # STREAM chunked encrypt / decrypt
     │   │   ├── armor.rs        # base64 ASCII-armor wrap / unwrap + detect
+    │   │   ├── format.rs       # peek magic; dispatch symcrypt vs AES Crypt
+    │   │   ├── aescrypt.rs     # AES Crypt (.aes) read interop: KDF, CBC+HMAC, inspect
     │   │   └── paths.rs        # default output-path helpers (pure, no I/O)
     │   └── tests/              # round-trip, tamper, KAT vectors
     ├── symcrypt-common/        # library — terminal glue shared by CLI + TUI
@@ -187,12 +190,21 @@ impl Default for EncryptOptions { /* secure defaults from §12 */ }
 pub struct Progress { pub done: u64, pub total: Option<u64> }
 type OnProgress = dyn FnMut(Progress) -> std::ops::ControlFlow<()>;
 
-/// Parsed header metadata returned by `inspect`. Exposes the §5.2/§5.4 wire
-/// fields — cipher, kdf, kdf_params, decoded flags (filename-present and the
-/// `keyfile_hint`), chunk_size, salt_len, nonce_prefix_len — plus the stored
-/// name and a `name_status` (absent / present / ignored_unsafe; see §6.2). It
-/// carries no key material and is unauthenticated until decrypt/verify succeeds.
+/// Parsed symcrypt header metadata. Exposes the §5.2/§5.4 wire fields — cipher,
+/// kdf, kdf_params, decoded flags (filename-present and the `keyfile_hint`),
+/// chunk_size, salt_len, nonce_prefix_len — plus the stored name and a
+/// `name_status` (absent / present / ignored_unsafe; see §6.2). It carries no
+/// key material and is unauthenticated until decrypt/verify succeeds.
 pub struct Header { /* … */ }
+
+/// Unauthenticated AES Crypt header metadata (§5.8): version, KDF, extension
+/// count, and a sanitized `CREATED_BY`. Carries no key material; the AES Crypt
+/// header is outside both HMACs, so it is never authenticated.
+pub struct AesCryptHeader { /* … */ }
+
+/// What `inspect` recognized. `decrypt`/`verify` keep identical signatures and
+/// dispatch internally; only `inspect` widens to describe two formats (§5.8).
+pub enum Metadata { Symcrypt(Header), AesCrypt(AesCryptHeader) }
 
 // ---- The four operations every front-end calls ----
 
@@ -206,7 +218,7 @@ pub fn decrypt<R: Read, W: Write>(
     input_len: Option<u64>, on_progress: &mut OnProgress,
 ) -> Result<()>;
 
-pub fn inspect<R: Read>(input: R) -> Result<Header>;       // powers --info (unauthenticated metadata)
+pub fn inspect<R: Read>(input: R) -> Result<Metadata>;     // powers --info (unauthenticated metadata, either format)
 pub fn verify<R: Read>(input: R, secret: &Secret, input_len: Option<u64>,
                        on_progress: &mut OnProgress) -> Result<()>;  // powers --verify
 
@@ -214,7 +226,12 @@ pub fn verify<R: Read>(input: R, secret: &Secret, input_len: Option<u64>,
 
 pub fn default_encrypt_output(input: &Path, armor: bool) -> PathBuf;
 pub fn default_decrypt_output(input: &Path, header: &Header) -> PathBuf;
+pub fn default_aescrypt_output(input: &Path) -> PathBuf;   // strips a trailing .aes (§5.8, §6.5)
 ```
+
+`decrypt`, `verify`, and `inspect` auto-detect the container format after armor
+is stripped: a symcrypt magic takes the native path, an `AES` magic takes the
+AES Crypt read path (§5.8). Encryption always writes symcrypt's own format.
 
 ### 2.4 Data flow
 
@@ -523,6 +540,46 @@ New ciphers or KDFs take new IDs (with a version bump if the layout changes).
 Because every file stores its own KDF parameters, files remain decryptable as
 the *defaults* for new files evolve over time.
 
+### 5.8 AES Crypt read interop
+
+As an interoperability convenience, `decrypt`, `verify`, and `inspect` also read
+foreign [AES Crypt](https://www.aescrypt.com/) (`.aes`) files. Detection is
+automatic: after armor is stripped, a leading `AES` magic takes the AES Crypt
+path and a `SYMCRYPT` magic takes the native path. **Encryption never writes
+AES Crypt** — symcrypt only ever emits its own container (§5.1). This is read
+interop, not an endorsement of the legacy format; the recommended migration is
+to decrypt a `.aes` file and re-encrypt it with symcrypt.
+
+**Supported versions: Stream Format 1 and 2.** Stream Format 3
+(PBKDF2-HMAC-SHA512) is **not yet implemented** — its PBKDF2 salt is not stated
+in the public spec and must be pinned from a real v3 fixture before it can be
+read, so a v3 file is rejected as `UnsupportedAesCryptVersion` (exit 4) until
+then.
+
+The format is **encrypt-then-MAC**: AES-256 in **CBC** mode with
+**HMAC-SHA256**, and a two-level key hierarchy. The reader:
+
+- derives `key1` from the password and the 16-byte `iv1` with the legacy KDF —
+  8192 iterations of `digest = SHA256(digest ‖ pw_utf16le)` seeded with
+  `iv1 ‖ 16 zero bytes` (the password is the UTF-8 text re-encoded UTF-16LE);
+- verifies `hmac1` over the 48-byte key block **before any body byte**, so a
+  wrong password fails early with no output (exit 3);
+- AES-256-CBC-decrypts the key block to recover `iv2 ‖ key2`, then streams the
+  body, authenticating each ciphertext block into `hmac2` and CBC-decrypting it,
+  deferring the final block by one so it can be truncated by the `fsmod` byte
+  (the original length mod 16) once `hmac2` verifies at end of stream.
+
+**The AES Crypt header, extensions, and the `fsmod` byte are unauthenticated**
+(outside both HMACs), so `inspect` labels the metadata `authenticated: false`
+(§6.2) and the reader never acts on extension contents. Resource use on hostile
+input is bounded: extensions are capped (256 KiB total, 1024 count), the body
+streams with bounded memory, and the §4.3 64 GiB plaintext cap applies. A failed
+HMAC, a truncated/appended body, or a ciphertext run that is not a multiple of
+16 are all the single `Auth` condition (§4.4), never distinguished from a wrong
+password. AES Crypt has no symcrypt-style keyfile component, so a keyfile-bearing
+or password-less secret against a `.aes` file is a usage error (§6.6); an AES
+Crypt key file may instead be supplied as a UTF-8 `--password-file` (§6.4).
+
 ---
 
 ## 6. CLI specification
@@ -549,10 +606,10 @@ required. `<FILE>` of `-` means **stdin**.
 
 | Mode             | Action                                                            |
 |------------------|-------------------------------------------------------------------|
-| `-e, --encrypt`  | Encrypt `<FILE>` → output.                                         |
-| `-d, --decrypt`  | Decrypt `<FILE>` → output.                                         |
-| `-i, --info`     | Print unauthenticated header metadata (cipher, KDF + params, version, flags, chunk size, and the stored filename when present and well-formed) without decrypting. No password needed. |
-| `--verify`       | Stream-decrypt and discard the output (nothing written) to verify integrity + password. Exit 0 if valid. |
+| `-e, --encrypt`  | Encrypt `<FILE>` → output. Always symcrypt's own format.          |
+| `-d, --decrypt`  | Decrypt `<FILE>` → output. A symcrypt or AES Crypt (`.aes`) container is auto-detected (§5.8). |
+| `-i, --info`     | Print unauthenticated header metadata without decrypting (symcrypt or AES Crypt). No password needed. |
+| `--verify`       | Stream-decrypt and discard the output (nothing written) to verify integrity + password (symcrypt or AES Crypt). Exit 0 if valid. |
 
 `--info` writes stable UTF-8 `key: value` lines to stdout in this exact order:
 `format`, `version`, `cipher`, `kdf`, `kdf_params`, `flags`, `keyfile_hint`,
@@ -565,6 +622,14 @@ for scrypt, and `iterations=<N>` for PBKDF2. `name_status` is `absent`,
 `present`, or `ignored_unsafe`; `name` is the stored basename only when
 `name_status: present`, and is otherwise empty. A non-UTF-8 stored name is a
 malformed header and does not produce normal `--info` output.
+
+For an **AES Crypt** file (§5.8), `--info` instead writes this stable block, in
+order: `format: aescrypt`, `version` (decimal), `cipher: aes-256-cbc`, `kdf`
+(`aescrypt-sha256` for v1/v2), `kdf_iterations` (the raw header value; `8192` for
+v1/v2), `extensions` (count), `created_by` (the sanitized `CREATED_BY` value or
+empty), and `authenticated: false`. The trailing `authenticated: false` makes
+the unauthenticated-header caveat explicit; for v3, `kdf_iterations` would report
+the file's raw value without enforcing the decrypt-time bound.
 
 ### 6.3 Options
 
@@ -646,6 +711,15 @@ and symlinks that resolve to non-regular files are usage errors. It reads at
 most 1 MiB of raw bytes; a larger file is a usage error. It removes exactly one
 trailing LF or CRLF if present; no other whitespace is trimmed.
 
+For an **AES Crypt** file (§5.8) the password text must be valid **UTF-8** (it is
+re-encoded UTF-16LE for the v1/v2 KDF), so a `--password-file` whose bytes are
+not valid UTF-8 after the one-newline trim is a usage error (exit 2). This is how
+an AES Crypt key file is supplied — UTF-16/BOM key files, and byte-exact password
+files whose intended password ends in a newline, are out of scope. AES Crypt has
+no symcrypt-style keyfile component, so `-k` (or `--no-password`) against a `.aes`
+file is also a usage error; for non-stdin decrypt/verify the CLI detects this and
+fails before prompting, and the core enforces it as a backstop for stdin.
+
 Password length is not separately capped: inline-argument, environment, and
 interactive passwords are inherently bounded by the operating system's
 argument/environment limits and the terminal, `--password-file` is bounded by
@@ -663,7 +737,10 @@ accommodates any resulting length.
   recognizable extension and append `.dec` to the original basename instead
   (e.g. `.symcrypt` → `.symcrypt.dec`).
   Stored names are written beside the input file. Refuse to overwrite unless
-  `-f`.
+  `-f`. An **AES Crypt** (`.aes`) file stores no filename, so its default output
+  strips a trailing `.aes` (else appends `.dec`, with the same empty-basename
+  fallback: `.aes` → `.aes.dec`); `.aes` is also stripped by the symcrypt path so
+  a symcrypt file misnamed `*.aes` still strips sensibly.
 - **Filesystem path inputs/outputs:** when `<FILE>` is not `-`, it must be an
   existing regular file. Directories, special files, and symlinks that resolve
   to non-regular files are usage errors. Output paths may name a new file or an
@@ -706,13 +783,20 @@ accommodates any resulting length.
 
 Errors returned by `symcrypt-core` map directly from its `SymError` variants —
 the front-end does not reclassify them: `Auth` → 3; `BadMagic` /
-`UnsupportedVersion` / `UnknownCipher` / `UnknownKdf` / `ReservedFlags` /
-`MalformedHeader` → 4; `InvalidOptions` (including an empty `Secret`, an empty
-or over-large keyfile buffer, mismatched KDF params, an unsafe stored filename,
-or an out-of-range programmatic `chunk_size`) → 2; `Canceled` → 130; `Io`,
-`InputTooLarge`, and the like → 1; argument/usage problems caught before the
-core is called → 2. The mapping lives in `symcrypt-common` and is shared by the
-CLI and TUI.
+`UnsupportedVersion` / `UnsupportedAesCryptVersion` / `UnknownCipher` /
+`UnknownKdf` / `ReservedFlags` / `MalformedHeader` → 4; `InvalidOptions`
+(including an empty `Secret`, an empty or over-large keyfile buffer, mismatched
+KDF params, an unsafe stored filename, an out-of-range programmatic `chunk_size`,
+or a keyfile-bearing / password-less / non-UTF-8-password secret against a `.aes`
+file) → 2; `Canceled` → 130; `Io`, `InputTooLarge`, and the like → 1;
+argument/usage problems caught before the core is called → 2. The mapping lives
+in `symcrypt-common` and is shared by the CLI and TUI.
+
+For an AES Crypt file (§5.8), `UnsupportedAesCryptVersion` (a stream-format
+version this build does not read, including the not-yet-implemented v3) is exit
+4, and a failed HMAC, a truncated/appended body, or a non-multiple-of-16
+ciphertext run are the single `Auth` condition (exit 3), never distinguished from
+a wrong password.
 
 `MalformedHeader` covers a header that is structurally invalid rather than merely
 unrecognized: an out-of-range `salt_len`, `nonce_prefix_len`, `chunk_size`,
@@ -869,6 +953,7 @@ the worker in a zeroizing buffer.
 | `argon2`                       | core               | Argon2id KDF                             |
 | `scrypt`                       | core               | scrypt KDF                               |
 | `pbkdf2` + `sha2`              | core               | PBKDF2-HMAC-SHA256 KDF                   |
+| `aes` + `cbc` + `hmac`         | core               | AES-256-CBC + HMAC-SHA256 for AES Crypt read interop (§5.8) |
 | `rand` / `getrandom`           | core               | CSPRNG for salt + nonce prefix           |
 | `zeroize`                      | core, cli, gtk     | Wipe key material from memory            |
 | `base64`                       | core               | ASCII armor                              |
@@ -958,6 +1043,25 @@ format changes across versions. Vector generation uses a test-only deterministic
 salt/nonce-prefix source so fixtures are reproducible; production encryption
 always uses OS randomness.
 
+**AES Crypt read interop (§5.8):** genuine Stream Format 2 `.aes` fixtures are
+minted by the reference `aescrypt` tool (committed under
+`symcrypt-core/tests/data/aescrypt/` with a generator script and the exact tool
+version) and a v1 fixture is mechanically derived from a v2 one; round-trip tests
+decrypt them byte-for-byte across plaintext sizes 0, 1, 15, 16, 17, and a few
+KiB, including a non-ASCII (UTF-16LE) password. The v1/v2 KDF is pinned by an
+independently computed `key1` vector. Negative tests assert `Auth` (exit 3) for a
+wrong password, a tampered key block or body, truncation/append, and a
+non-multiple-of-16 body; format tests assert exit 4 for an unsupported version
+(including the not-yet-implemented v3), a nonzero reserved byte, an out-of-range
+`fsmod`, and extension framing that exceeds the size/count bounds; usage tests
+assert exit 2 for a keyfile-bearing, password-less, or non-UTF-8-password secret
+against a `.aes` file. The 64 GiB cap and `on_progress` cancellation are
+exercised on the AES Crypt path too. CLI `assert_cmd` tests cover decrypt
+(default `.aes` stripping, `-o`, `-o -`), verify, the byte-exact AES Crypt
+`--info` block, the pre-prompt keyfile rejection, and the non-UTF-8
+`--password-file` rejection; the TUI/GTK `info` renderers gain AES Crypt unit
+tests.
+
 **Front-end tests.** Because the front-ends are thin, most coverage lives in
 core. `symcrypt` gets CLI integration tests (`assert_cmd` + `tempfile`):
 default-extension behavior, required `-o` for stdin encrypt/decrypt,
@@ -1027,6 +1131,17 @@ Per repo convention, tests accompany every code change.
 - **KDF defaults** target meaningful offline-guessing cost on commodity hardware
   while staying usable; experts can raise them, and the chosen values are stored
   per file so old files still decrypt.
+- **AES Crypt read interop is legacy and unauthenticated-header (§5.8).** Reading
+  a `.aes` file uses legacy KDFs (v1/v2: 8192-iteration SHA-256) and CBC+HMAC
+  rather than AEAD, and the AES Crypt header, extensions, and `fsmod` byte sit
+  outside both HMACs — so `--info` labels the metadata `authenticated: false` and
+  the reader never acts on extension contents. `hmac1` is verified before any
+  body byte (a wrong password fails early with no output), `hmac2` is verified
+  before the final block is `fsmod`-truncated (no padding oracle), tags are
+  compared in constant time, and extension count/size, the v3 iteration count
+  (when v3 lands), and body size are bounded against hostile input. symcrypt
+  never *writes* this format; re-encrypting decrypted data with symcrypt's own
+  authenticated format is the recommended migration.
 
 Per repo policy, these implications are flagged for confirmation before
 implementation begins, and tests in §10 verify each integrity property.
@@ -1056,12 +1171,15 @@ implementation begins, and tests in §10 verify each integrity property.
 
 ## 13. Out of scope for v1
 
-Asymmetric crypto, compression, plaintext padding / size hiding, keyfiles
-managed by a keyring/agent, multi-recipient files, special handling of Windows
-reserved device names (`CON`, `NUL`, …) in stored filenames, and HKDF-based
-per-file subkey separation (the random-salt-per-file design already prevents key
-reuse except on salt collision or RNG failure; HKDF separation is a possible
-hardening later).
+**AES Crypt encryption** (symcrypt reads `.aes` files but never writes them —
+§5.8) and **AES Crypt Stream Format 3** (deferred until its PBKDF2 salt can be
+pinned from a real v3 fixture; a v3 file is rejected as
+`UnsupportedAesCryptVersion` until then). Also: asymmetric crypto, compression,
+plaintext padding / size hiding, keyfiles managed by a keyring/agent,
+multi-recipient files, special handling of Windows reserved device names (`CON`,
+`NUL`, …) in stored filenames, and HKDF-based per-file subkey separation (the
+random-salt-per-file design already prevents key reuse except on salt collision
+or RNG failure; HKDF separation is a possible hardening later).
 
 ---
 
