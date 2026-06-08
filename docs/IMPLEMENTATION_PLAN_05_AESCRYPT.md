@@ -167,9 +167,19 @@ pw8    = UTF-8(password)
 key1   = PBKDF2-HMAC-SHA512(pw8, salt = iv1, iterations = kdf_iterations, dkLen = 32)
 ```
 
+> **Provisional — confirm from a fixture.** The public AES Crypt stream-format
+> page documents PBKDF2-HMAC-SHA512, the `‖ 0x03` HMAC input, and PKCS#7 padding,
+> but it does **not** state the PBKDF2 *salt*. `salt = iv1` (and `dkLen = 32`, and
+> `key1` keying both `hmac1` and the `enc_keys` unwrap) is unverified against the
+> spec and must be pinned from a real v3 fixture in the §5.10 step-2 KDF-vector
+> test *before* any v3 body code is written — a wrong salt means nothing decrypts.
+
 The v3 `kdf_iterations` value is unauthenticated until `hmac1` verifies; accept
 only `1..=10_000_000` before use so hostile inputs cannot force unbounded CPU
-work. Out-of-range values are `MalformedHeader`.
+work (≈33× the reference tool's 300,000 default, so any realistic file is accepted
+while CPU-DoS stays bounded). Out-of-range values are `MalformedHeader` in
+`decrypt`/`verify`; `inspect` reports the raw value without enforcing the bound
+(it derives no key — §5.8).
 
 > **Password encoding.** symcrypt front-ends capture the password as UTF-8 bytes
 > (DESIGN §6.4). For AES Crypt v1/v2 we validate those bytes as UTF-8 text and
@@ -255,7 +265,7 @@ implementing.**
 | 1 | **Legacy KDFs.** v1/v2 use 8192-iteration SHA-256, and v3 uses PBKDF2-HMAC-SHA512 with an unauthenticated iteration count. These are fixed by the file we are reading and are not symcrypt's chosen KDFs. | Read-only. Bound v3 iterations before deriving (§2.4). Docs/help recommend **re-encrypting** decrypted data with symcrypt's own format. No symcrypt file is ever written with these KDFs. |
 | 2 | **Unauthenticated header.** `magic`, `version`, `reserved`, v3 `kdf_iterations`, and all **extensions** are outside both HMACs. An attacker can flip the version byte, rewrite extensions, or alter the v3 KDF work factor before authentication. This is a property of the foreign format, not fixable on read. | Treat all header/extension data as *unauthenticated even after a successful decrypt*. `inspect` labels it so. We bound and sanitize extensions, bound v3 iterations, and never act on extension contents. |
 | 3 | **Unauthenticated v1/v2 `fsmod`.** The length-mod-16 byte sits outside `hmac2`, so the last block's *visible length* is malleable by up to 15 bytes (the bytes themselves are authentic). | Validate `fsmod < 16` and that it is consistent with the block count (`fsmod == 0` when there are zero body blocks; `fsmod == 0` means 16 final bytes when blocks exist). Document the residual malleability. v3 has no `fsmod`; it uses authenticated ciphertext plus PKCS#7 padding checked after `hmac2`. |
-| 4 | **CBC + late MAC.** `hmac2` covers the body and sits *after* it, so a pure verify-before-output design would need two passes (impossible for stdin). We stream-decrypt while computing `hmac2`, then verify at end. | Plaintext is written to the front-end's **temp file** and only renamed in on success; an `Auth` failure discards it (DESIGN §2.2). For `-o -` (stdout) partial plaintext may appear before the check — the *same* caveat symcrypt already documents (DESIGN §11). Verify `hmac2` before applying v3 PKCS#7 padding so there is no padding oracle; never deliver unverified plaintext to a file. |
+| 4 | **CBC + late MAC.** `hmac2` covers the body and sits *after* it, so a pure verify-before-output design would need two passes (impossible for stdin). We stream-decrypt while computing `hmac2`, then verify at end. | Plaintext is written to the front-end's **temp file** and only renamed on success; an `Auth` failure discards it (DESIGN §2.2). For `-o -` (stdout) partial plaintext may appear before the check — the *same* caveat symcrypt already documents (DESIGN §11). Verify `hmac2` before applying v3 PKCS#7 padding so there is no padding oracle; never deliver unverified plaintext to a file. |
 | 5 | **`hmac1` first.** For v1/v2/v3, a wrong password yields a wrong `key1`, so `hmac1` fails **before any body byte is processed** — wrong-password is caught early (exit 3) with no output. | Verify `hmac1` immediately after KDF, before touching the body. For v3 the `hmac1` input is `enc_keys ‖ 0x03` (§2.2). |
 | 6 | **Constant-time tag checks.** A non-constant-time compare could leak. | Use the RustCrypto `Mac::verify_slice` (constant-time); never compare tags with `==`. |
 | 7 | **Resource bounds on hostile input.** A crafted file could claim huge/streamed extensions, a huge v3 KDF iteration count, or an enormous body. | Cap total extension bytes and count (§5.6); cap v3 iterations (§2.4); enforce the 64 GiB plaintext cap during streaming. |
@@ -363,9 +373,9 @@ Single streaming routine shared by decrypt (writes plaintext) and verify
    optional v3 `kdf_iterations`, `iv1`, `enc_keys` (48), `hmac1` (32). Report
    `on_progress` once after the header.
 2. **Reject incompatible secrets** (implication #8).
-3. **Validate and encode the password text** (§2.4): reject empty, keyfile-bearing,
-   or non-UTF-8 password bytes with `InvalidOptions`; encode UTF-16LE for v1/v2
-   and UTF-8 for v3.
+3. **Validate and encode the password text** (§2.4): reject non-UTF-8 password
+   bytes with `InvalidOptions` (empty and keyfile-bearing secrets are already
+   rejected in step 2); encode UTF-16LE for v1/v2 and UTF-8 for v3.
 4. **Derive `key1`** with the version-specific §2.4 KDF, in `Zeroizing` buffers.
    Honor cancellation before/after. For v3, validate the unauthenticated
    `kdf_iterations` bound before running PBKDF2.
@@ -385,7 +395,9 @@ Single streaming routine shared by decrypt (writes plaintext) and verify
    decrypted block back): the final block needs `fsmod` truncation (v1/v2) or
    PKCS#7 unpadding (v3), and which block is final is not known until EOF.
    Enforce the 64 GiB plaintext cap from bytes actually produced. Report
-   `on_progress` per block and observe cancellation.
+   `on_progress` and observe cancellation per read buffer (the STREAM path's
+   granularity), not per 16-byte block, so progress callbacks don't dominate
+   runtime on large files.
 8. **At EOF:** require the consumed ciphertext to be a multiple of 16; for v3
    require at least one ciphertext block (PKCS#7 always emits a full block, even
    for empty plaintext). Verify `hmac2` with `verify_slice` before processing the
@@ -442,7 +454,10 @@ PKCS#7 padding.
 `AesCryptHeader { version: u8, kdf: AesCryptKdf, extension_count: usize, created_by: Option<String> }`
 (no key material; unauthenticated). `AesCryptKdf` records `Sha256 { iterations: 8192 }`
 for v1/v2 and `Pbkdf2HmacSha512 { iterations }` for v3. `inspect` parses through
-`hmac1` **without a password** and returns `Metadata::AesCrypt(_)`. Stable
+`hmac1` **without a password** and returns `Metadata::AesCrypt(_)`. For v3 it
+reports the raw header `kdf_iterations` **without** enforcing the `1..=10_000_000`
+bound (it derives no key, so a hostile work factor is surfaced rather than
+rejected); only `decrypt`/`verify` enforce the bound before deriving `key1`. Stable
 `--info` field order (rendered by the front-ends, §6):
 
 ```
@@ -465,8 +480,9 @@ byte-exact block for v2 and v3 fixtures with and without `CREATED_BY`.
   (case-sensitive), else append `.dec`, with the same empty-basename fallback as
   the symcrypt helper (`.aes` → `.aes.dec`). Supported AES Crypt stream formats
   have no authenticated stored filename, so there is no name-from-header branch.
-- Factor the suffix-stripping into a shared helper and **add `.aes`** to the set
-  so a symcrypt file inadvertently named `*.aes` still strips sensibly.
+- **Add `.aes`** to the existing shared `strip_encrypt_suffix` helper (today:
+  `.symcrypt.asc`, `.symcrypt`, `.asc`) so a symcrypt file inadvertently named
+  `*.aes` also strips sensibly.
 - **Tests:** `secret.aes → secret`, `secret → secret.dec`, `.aes → .aes.dec`,
   non-UTF-8 input → `.dec` appended (mirrors existing `paths.rs` tests).
 
@@ -476,7 +492,10 @@ byte-exact block for v2 and v3 fixtures with and without `CREATED_BY`.
    create `format.rs`/`aescrypt.rs`; export `Metadata`, `AesCryptHeader`.
 2. **KDFs** — implement and test the §2.4 v1/v2 SHA-256 derivation and v3
    PBKDF2-HMAC-SHA512 derivation against known vectors (derive `key1` from a
-   fixed password + `iv1`; lock the bytes).
+   fixed password + `iv1`; lock the bytes). **Confirm the provisional v3
+   `salt = iv1` here** (§2.4): derive the vector from a real v3 fixture's `iv1`
+   and require its `hmac1` to verify. The salt is not in the public spec, so this
+   step gates all later v3 work.
 3. **Header parse + extensions + v3 iterations** — parse/validate; bounds tests
    (§5.6).
 4. **`hmac1` + key unwrap** — verify-then-unwrap for v1/v2 (`enc_keys`) and v3
@@ -634,7 +653,9 @@ a MAC; v0, if pursued, needs its own source.)
 
 **KDF vectors.** Lock `key1` for fixed (`password`, `iv1`) inputs for both the
 v1/v2 SHA-256 KDF and the v3 PBKDF2-HMAC-SHA512 KDF so neither derivation can
-drift silently.
+drift silently. The v3 vector also pins the provisional `salt = iv1` assumption
+(§2.4): mint it from a real v3 fixture and require `hmac1` to verify, so a wrong
+salt fails immediately rather than after the body code is written.
 
 **Round-trip.** Decrypt each committed fixture → byte-exact plaintext, across the
 sizes above (exercises the trailer buffer, `fsmod`, empty body, multi-block).
@@ -672,7 +693,8 @@ sizes above (exercises the trailer buffer, `fsmod`, empty body, multi-block).
 
 ## 12. Decisions
 
-Resolved 2026-06-07.
+Resolved 2026-06-07; v3 KDF-salt, `inspect`-bound, and iteration-ceiling
+clarifications added 2026-06-08.
 
 - **Version 3 support — included.** v3 is required because current AES Crypt 4.x
   writes Stream Format 3. It adds PBKDF2-HMAC-SHA512, a bounded unauthenticated
@@ -701,6 +723,15 @@ Resolved 2026-06-07.
   one-trailing-newline trim. UTF-16/BOM AES Crypt key files and byte-exact
   password files whose intended password ends with a newline are out of scope;
   non-UTF-8 password bytes on the AES Crypt path are `InvalidOptions`.
+- **v3 PBKDF2 salt — provisional, gated by a fixture.** The public stream-format
+  page omits the PBKDF2 salt, so `salt = iv1` (§2.4) is unverified and must be
+  pinned from a real v3 fixture in the §5.10 step-2 KDF-vector test before any v3
+  body code is written.
+- **`inspect` does not enforce the v3 iteration bound.** It reports the raw
+  `kdf_iterations` (no derivation, so a hostile work factor is surfaced, not
+  rejected); only `decrypt`/`verify` enforce `1..=10_000_000` (§2.4, §5.8).
+- **v3 iteration ceiling — `10_000_000`.** ≈33× the reference tool's 300,000
+  default: accepts any realistic file while bounding CPU-DoS on hostile input.
 
 ---
 
