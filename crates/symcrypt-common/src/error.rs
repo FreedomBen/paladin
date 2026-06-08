@@ -26,6 +26,7 @@ pub fn exit_code(err: &SymError) -> i32 {
         SymError::Auth => EXIT_AUTH,
         SymError::BadMagic
         | SymError::UnsupportedVersion(_)
+        | SymError::UnsupportedAesCryptVersion(_)
         | SymError::UnknownCipher(_)
         | SymError::UnknownKdf(_)
         | SymError::ReservedFlags(_)
@@ -82,6 +83,7 @@ mod tests {
         assert_eq!(exit_code(&SymError::Auth), 3);
         assert_eq!(exit_code(&SymError::BadMagic), 4);
         assert_eq!(exit_code(&SymError::UnsupportedVersion(2)), 4);
+        assert_eq!(exit_code(&SymError::UnsupportedAesCryptVersion(4)), 4);
         assert_eq!(exit_code(&SymError::UnknownCipher(9)), 4);
         assert_eq!(exit_code(&SymError::UnknownKdf(9)), 4);
         assert_eq!(exit_code(&SymError::ReservedFlags(0xfc)), 4);

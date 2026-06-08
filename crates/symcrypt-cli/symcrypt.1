@@ -13,6 +13,19 @@ file can be decrypted with only the password or keyfile \(em no out-of-band
 parameters. The default cipher is AES-256-GCM and the default key-derivation
 function is Argon2id.
 .PP
+.BR \-d ", " \-\-verify ", and " \-i
+also read foreign
+.B AES Crypt
+.RB ( .aes )
+files (Stream Format 1 and 2), detected automatically. Encryption always writes
+symcrypt's own format, never AES Crypt; to migrate a
+.B .aes
+file, decrypt it and re-encrypt with symcrypt. An AES Crypt header is
+unauthenticated, so
+.B \-i
+labels it
+.BR "authenticated: false" .
+.PP
 Exactly one mode and one
 .I FILE
 are required (except with
@@ -34,15 +47,22 @@ to an output container.
 .BR \-d ", " \-\-decrypt
 Decrypt
 .IR FILE .
+A symcrypt or AES Crypt
+.RB ( .aes )
+container is detected automatically.
 .TP
 .BR \-i ", " \-\-info
-Print unauthenticated header metadata (cipher, KDF and parameters, version,
-flags, chunk size, and a stored filename when present and well-formed) to
-standard output. No password is read.
+Print unauthenticated header metadata to standard output. No password is read.
+For a symcrypt file this is the cipher, KDF and parameters, version, flags, chunk
+size, and a stored filename when present and well-formed; for an AES Crypt file
+it is the version, KDF, extension count, and
+.B CREATED_BY
+value, ending with
+.BR "authenticated: false" .
 .TP
 .B \-\-verify
-Decrypt and discard the output to verify integrity and the secret. Nothing is
-written; exit status 0 means valid.
+Decrypt and discard the output to verify integrity and the secret (symcrypt or
+AES Crypt). Nothing is written; exit status 0 means valid.
 .SH OPTIONS
 .TP
 .BI \-o " FILE" "\fR, \fP" \-\-output " FILE"
@@ -60,7 +80,11 @@ or
 .BR \-\-password\-env .
 .TP
 .BI \-\-password\-file " FILE"
-Read the password from a file. Exactly one trailing LF or CRLF is trimmed.
+Read the password from a file. Exactly one trailing LF or CRLF is trimmed. When
+decrypting or verifying an AES Crypt
+.RB ( .aes )
+file the contents must be valid UTF-8 text (this is how an AES Crypt key file may
+be supplied); UTF-16/BOM key files are not supported.
 .TP
 .BI \-\-password\-env " VAR"
 Read the password from the environment variable
@@ -73,7 +97,14 @@ Use an empty password (keyfile-only mode). Valid only together with
 .BI \-k " FILE" "\fR, \fP" \-\-keyfile " FILE"
 Keyfile material combined with the password source.
 .B \-
-is rejected. The keyfile must be a regular file of 1 byte to 1 MiB.
+is rejected. The keyfile must be a regular file of 1 byte to 1 MiB. Applies to
+symcrypt files only; AES Crypt files have no symcrypt-style keyfile component, so
+.B \-k
+(or
+.BR \-\-no\-password )
+against a
+.B .aes
+file is a usage error.
 .TP
 .BI \-c " NAME" "\fR, \fP" \-\-cipher " NAME"
 Cipher:
@@ -163,9 +194,13 @@ with
 .BR \-\-armor );
 decrypt uses the stored filename when present and well-formed, otherwise strips
 a recognized
-.IR .symcrypt.asc ", " .symcrypt ", or " .asc
+.IR .symcrypt.asc ", " .symcrypt ", " .asc ", or " .aes
 suffix, otherwise appends
 .IR .dec .
+An AES Crypt file stores no filename, so decrypt strips its
+.I .aes
+suffix (or appends
+.IR .dec ).
 Stdin encrypt and decrypt require
 .BR \-o .
 File outputs are written to a sibling temporary file (mode 0600 on Unix) and
@@ -220,6 +255,15 @@ Keyfile-only encryption:
 .RS
 .EX
 symcrypt \-e vault.tar \-k usb.key \-\-no\-password
+.EE
+.RE
+.PP
+Decrypt a foreign AES Crypt file (writes
+.IR secret.txt ):
+.PP
+.RS
+.EX
+symcrypt \-d secret.txt.aes
 .EE
 .RE
 .SH SEE ALSO

@@ -41,15 +41,48 @@ pub fn default_decrypt_output(input: &Path, header: &Header) -> PathBuf {
     }
 }
 
+/// Default output path for decrypting an AES Crypt (`.aes`) file (DESIGN §6.5).
+/// The supported AES Crypt stream formats store no authenticated original
+/// filename, so the output name is always derived from the input: a trailing
+/// `.aes` (case-sensitive) is stripped, otherwise `.dec` is appended. Stripping
+/// that would empty the basename (e.g. `.aes`) instead appends `.dec`. A
+/// non-UTF-8 filename cannot be stripped safely, so `.dec` is appended.
+pub fn default_aescrypt_output(input: &Path) -> PathBuf {
+    let dir = input.parent().unwrap_or(Path::new(""));
+    let file_name = input.file_name().unwrap_or(input.as_os_str());
+    match file_name.to_str() {
+        Some(name) => dir.join(strip_aescrypt_suffix(name)),
+        None => {
+            let mut os = input.as_os_str().to_os_string();
+            os.push(".dec");
+            PathBuf::from(os)
+        }
+    }
+}
+
 /// Strip a recognized encryption suffix from a UTF-8 filename, or append `.dec`.
 /// Stripping that would leave an empty basename (e.g. `.symcrypt`) instead
-/// appends `.dec` to the original (DESIGN §6.5).
+/// appends `.dec` to the original (DESIGN §6.5). `.aes` is included so a
+/// symcrypt file inadvertently named `*.aes` still strips sensibly.
 fn strip_encrypt_suffix(name: &str) -> String {
-    for suffix in [".symcrypt.asc", ".symcrypt", ".asc"] {
+    for suffix in [".symcrypt.asc", ".symcrypt", ".asc", ".aes"] {
         if let Some(stripped) = name.strip_suffix(suffix) {
             if stripped.is_empty() {
                 return format!("{name}.dec");
             }
+            return stripped.to_string();
+        }
+    }
+    format!("{name}.dec")
+}
+
+/// Strip a trailing `.aes` (only), or append `.dec`, with the same empty-basename
+/// fallback. Used by [`default_aescrypt_output`]; kept separate from
+/// [`strip_encrypt_suffix`] because an AES Crypt file's name is only ever a
+/// `.aes` name.
+fn strip_aescrypt_suffix(name: &str) -> String {
+    if let Some(stripped) = name.strip_suffix(".aes") {
+        if !stripped.is_empty() {
             return stripped.to_string();
         }
     }
@@ -170,6 +203,44 @@ mod tests {
         assert_eq!(strip_encrypt_suffix("x.symcrypt.asc"), "x");
         assert_eq!(strip_encrypt_suffix("x.symcrypt"), "x");
         assert_eq!(strip_encrypt_suffix("x.asc"), "x");
+        // A symcrypt file inadvertently named *.aes also strips.
+        assert_eq!(strip_encrypt_suffix("x.aes"), "x");
+    }
+
+    #[test]
+    fn aescrypt_output_strips_aes_or_appends_dec() {
+        let cases = [
+            ("secret.aes", "secret"),
+            ("dir/report.pdf.aes", "dir/report.pdf"),
+            ("secret", "secret.dec"),
+            ("plain.txt", "plain.txt.dec"),
+            // Stripping would empty the basename, so .dec is appended instead.
+            (".aes", ".aes.dec"),
+            // Case-sensitive: .AES is not stripped.
+            ("photo.AES", "photo.AES.dec"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                default_aescrypt_output(Path::new(input)),
+                PathBuf::from(expected),
+                "input {input}"
+            );
+        }
+    }
+
+    // A non-UTF-8 filename can't be suffix-stripped safely, so `.dec` is appended.
+    #[cfg(unix)]
+    #[test]
+    fn aescrypt_output_appends_dec_for_non_utf8_filename() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let raw = [b'f', b'o', b'o', 0x80u8];
+        let name = std::ffi::OsStr::from_bytes(&raw);
+        let input = Path::new("dir").join(name);
+
+        let mut expected = input.as_os_str().to_os_string();
+        expected.push(".dec");
+        assert_eq!(default_aescrypt_output(&input), PathBuf::from(expected));
     }
 
     // A non-UTF-8 filename can't be suffix-stripped safely, so `.dec` is appended

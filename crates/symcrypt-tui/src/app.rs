@@ -497,8 +497,8 @@ impl App {
         let result = common::open_input(&input)
             .and_then(|mut r| core::inspect(&mut r).map_err(common::AppError::from));
         match result {
-            Ok(header) => {
-                self.info_lines = info::format_info(&header);
+            Ok(meta) => {
+                self.info_lines = info::format_info(&meta);
                 self.field_error = None;
                 self.status = RunStatus::Done("inspected".to_string());
                 self.last_exit = 0;
@@ -698,7 +698,8 @@ impl App {
     /// encrypt options. Called on input edits, mode switches, and the armor
     /// toggle — not on every focus move, so navigation does no blocking I/O.
     /// Encrypt prefills from the pure default; Decrypt inspects the header for a
-    /// stored name and hints when the input is not a symcrypt file.
+    /// stored name (symcrypt) or strips `.aes` (AES Crypt) and hints when the
+    /// input is not a recognized container.
     pub fn sync_paths(&mut self) {
         self.field_error = None;
         if self.input.is_empty() {
@@ -720,13 +721,20 @@ impl App {
                 }
                 Mode::Decrypt => match common::open_input(&path) {
                     Ok(mut reader) => match core::inspect(&mut reader) {
-                        Ok(header) => {
-                            let out = core::default_decrypt_output(&path, &header);
+                        Ok(meta) => {
+                            let out = match meta {
+                                core::Metadata::Symcrypt(h) => {
+                                    core::default_decrypt_output(&path, &h)
+                                }
+                                core::Metadata::AesCrypt(_) => core::default_aescrypt_output(&path),
+                            };
                             self.output.set_text(out.to_string_lossy().into_owned());
                         }
                         Err(_) => {
-                            self.field_error =
-                                Some("not a symcrypt file; enter the output path".to_string());
+                            self.field_error = Some(
+                                "not a recognized symcrypt or AES Crypt file; enter the output path"
+                                    .to_string(),
+                            );
                         }
                     },
                     Err(e) => self.field_error = Some(e.to_string()),
@@ -1055,6 +1063,25 @@ mod tests {
         app.start_run(); // inline; no worker thread
         assert!(!app.is_running());
         assert_eq!(app.info_lines.len(), 12);
+        assert!(matches!(app.status, RunStatus::Done(_)));
+    }
+
+    #[test]
+    fn info_mode_inline_inspect_handles_aescrypt() {
+        // A genuine AES Crypt v2 fixture inspects to the 8-line AES Crypt block.
+        const AESCRYPT_V2: &[u8] =
+            include_bytes!("../../symcrypt-core/tests/data/aescrypt/v2_size_17.aes");
+        let dir = tempfile::tempdir().unwrap();
+        let aes = dir.path().join("sample.aes");
+        std::fs::write(&aes, AESCRYPT_V2).unwrap();
+
+        let mut app = App::new(Some(path_str(&aes)));
+        app.mode = Mode::Info;
+        app.start_run();
+        assert!(!app.is_running());
+        assert_eq!(app.info_lines.len(), 8);
+        assert_eq!(app.info_lines[0], "format: aescrypt");
+        assert_eq!(app.info_lines[7], "authenticated: false");
         assert!(matches!(app.status, RunStatus::Done(_)));
     }
 

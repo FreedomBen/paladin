@@ -26,6 +26,10 @@ out-of-band parameters.
 - **Strong, modern defaults** a non-expert gets for free, with expert knobs.
 - **Pure-Rust crypto** from the [RustCrypto](https://github.com/RustCrypto)
   project — no hand-rolled primitives.
+- **AES Crypt read interop**: `-d`, `--verify`, and `-i` also decrypt, verify,
+  and inspect foreign [AES Crypt](https://www.aescrypt.com/) (`.aes`) files
+  (Stream Format 1 and 2), detected automatically. Encryption always writes
+  symcrypt's own format; re-encrypt a decrypted `.aes` file to migrate it.
 
 ## Architecture
 
@@ -249,7 +253,15 @@ symcrypt --verify report.pdf.symcrypt       # check integrity + password, writin
 printf 'secret' | PW=passphrase symcrypt -e - -o s.symcrypt --password-env PW
 symcrypt -e vault.tar -k usb.key --no-password   # keyfile-only
 symcrypt -e big.iso -c chacha20-poly1305 --remove
+symcrypt -d secret.txt.aes                       # decrypt a foreign AES Crypt file → secret.txt
 ```
+
+`-d`, `--verify`, and `-i` auto-detect foreign AES Crypt (`.aes`) files (Stream
+Format 1 and 2). Their header is unauthenticated, so `-i` reports
+`authenticated: false`; symcrypt never *writes* AES Crypt, so to migrate a file,
+decrypt it and re-encrypt with `-e`. An AES Crypt key file may be passed with
+`--password-file` only when it is valid UTF-8 text (`-k` and `--no-password`
+apply to symcrypt files only).
 
 Existing output files are refused unless `-f/--force` is given; on Unix the
 output is created with mode `0600`. Exit codes: `0` success, `1` I/O or general

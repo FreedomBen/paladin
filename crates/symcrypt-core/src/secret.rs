@@ -63,6 +63,15 @@ impl Secret {
         self.keyfile.is_some()
     }
 
+    /// The raw password bytes, for the AES Crypt read path (`aescrypt.rs`), which
+    /// validates them as UTF-8 text and re-encodes them per the legacy format
+    /// (UTF-16LE for v1/v2). The symcrypt `kdf_input()` blend is wrong there
+    /// because AES Crypt has no symcrypt-style keyfile component, so the AES
+    /// Crypt path also rejects a keyfile-bearing secret separately.
+    pub(crate) fn password_bytes(&self) -> &[u8] {
+        &self.password
+    }
+
     /// The domain-separated, length-prefixed KDF input (DESIGN §4.2):
     /// `SECRET_DOMAIN || u64be(pw_len) || pw || u64be(kf_len) || kf`.
     ///
@@ -139,6 +148,16 @@ mod tests {
     fn has_keyfile_reflects_presence() {
         assert!(!Secret::new(b"pw", None).unwrap().has_keyfile());
         assert!(Secret::new(b"pw", Some(b"k")).unwrap().has_keyfile());
+    }
+
+    #[test]
+    fn password_bytes_returns_the_raw_password() {
+        // The AES Crypt path needs the unblended password bytes (no keyfile mix,
+        // no domain prefix) so it can validate/re-encode them itself.
+        let s = Secret::new(b"hunter2", Some(b"keymaterial")).unwrap();
+        assert_eq!(s.password_bytes(), b"hunter2");
+        let empty = Secret::new(b"", Some(b"k")).unwrap();
+        assert_eq!(empty.password_bytes(), b"");
     }
 
     #[test]

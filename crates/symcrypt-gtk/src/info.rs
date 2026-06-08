@@ -6,7 +6,7 @@
 //! byte-identical to the CLI's `--info` output; [`header_rows`] exposes the same
 //! fields as structured key/value pairs for rendering into widgets.
 
-use symcrypt_core::{Header, KdfParams, NameStatus};
+use symcrypt_core::{AesCryptHeader, Header, KdfParams, Metadata, NameStatus};
 
 /// A single labeled field of header metadata for the Info pane.
 ///
@@ -86,10 +86,34 @@ pub fn header_rows(header: &Header) -> Vec<InfoRow> {
     ]
 }
 
-/// Render `header` as the multi-line `--info` text: each row as `"{key}: {value}"`,
-/// joined by `\n`, with a single trailing newline. Byte-identical to the CLI.
-pub fn header_text(header: &Header) -> String {
-    let mut out = header_rows(header)
+/// Build the ordered Info-pane rows for an AES Crypt header (PLAN_05 §5.8). The
+/// keys, order, and values match the CLI's `--info` AES Crypt block; the cipher
+/// is always AES-256-CBC and `authenticated` is always `false`.
+pub fn aescrypt_rows(header: &AesCryptHeader) -> Vec<InfoRow> {
+    vec![
+        InfoRow::new("format", "aescrypt"),
+        InfoRow::new("version", header.version.to_string()),
+        InfoRow::new("cipher", "aes-256-cbc"),
+        InfoRow::new("kdf", header.kdf.name()),
+        InfoRow::new("kdf_iterations", header.kdf.iterations().to_string()),
+        InfoRow::new("extensions", header.extension_count.to_string()),
+        InfoRow::new("created_by", header.created_by.clone().unwrap_or_default()),
+        InfoRow::new("authenticated", "false"),
+    ]
+}
+
+/// Build the Info-pane rows for whichever container `inspect` recognized.
+pub fn metadata_rows(meta: &Metadata) -> Vec<InfoRow> {
+    match meta {
+        Metadata::Symcrypt(header) => header_rows(header),
+        Metadata::AesCrypt(header) => aescrypt_rows(header),
+    }
+}
+
+/// Render rows as the multi-line `--info` text: each row as `"{key}: {value}"`,
+/// joined by `\n`, with a single trailing newline.
+fn rows_to_text(rows: &[InfoRow]) -> String {
+    let mut out = rows
         .iter()
         .map(|row| format!("{}: {}", row.key, row.value))
         .collect::<Vec<_>>()
@@ -98,12 +122,22 @@ pub fn header_text(header: &Header) -> String {
     out
 }
 
+/// Render a symcrypt `header` as `--info` text. Byte-identical to the CLI.
+pub fn header_text(header: &Header) -> String {
+    rows_to_text(&header_rows(header))
+}
+
+/// Render metadata as `--info` text for either format. Byte-identical to the CLI.
+pub fn metadata_text(meta: &Metadata) -> String {
+    rows_to_text(&metadata_rows(meta))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::ops::ControlFlow;
     use symcrypt_core::{
-        encrypt, inspect, CipherId, EncryptOptions, Header, KdfId, KdfParams, Secret,
+        encrypt, inspect, CipherId, EncryptOptions, Header, KdfId, KdfParams, Metadata, Secret,
     };
 
     /// Cheapest valid Argon2id params, to keep KDF-bound tests fast.
@@ -121,7 +155,10 @@ mod tests {
         let mut out = Vec::new();
         let mut cb = |_p| ControlFlow::Continue(());
         encrypt(&b"hello"[..], &mut out, &secret, &opts, Some(5), &mut cb).unwrap();
-        inspect(&out[..]).unwrap()
+        match inspect(&out[..]).unwrap() {
+            Metadata::Symcrypt(h) => h,
+            Metadata::AesCrypt(_) => panic!("expected a symcrypt container"),
+        }
     }
 
     fn opts(
@@ -253,6 +290,55 @@ mod tests {
         assert_eq!(name_status_str(NameStatus::Absent), "absent");
         assert_eq!(name_status_str(NameStatus::Present), "present");
         assert_eq!(name_status_str(NameStatus::IgnoredUnsafe), "ignored_unsafe");
+    }
+
+    #[test]
+    fn aescrypt_rows_and_text_match_the_cli_block() {
+        use symcrypt_core::{AesCryptHeader, AesCryptKdf, Metadata};
+        let meta = Metadata::AesCrypt(AesCryptHeader {
+            version: 2,
+            kdf: AesCryptKdf::Sha256 { iterations: 8192 },
+            extension_count: 2,
+            created_by: Some("aescrypt 3.16.1".to_string()),
+        });
+        let rows = metadata_rows(&meta);
+        let expected = vec![
+            InfoRow::new("format", "aescrypt"),
+            InfoRow::new("version", "2"),
+            InfoRow::new("cipher", "aes-256-cbc"),
+            InfoRow::new("kdf", "aescrypt-sha256"),
+            InfoRow::new("kdf_iterations", "8192"),
+            InfoRow::new("extensions", "2"),
+            InfoRow::new("created_by", "aescrypt 3.16.1"),
+            InfoRow::new("authenticated", "false"),
+        ];
+        assert_eq!(rows, expected);
+
+        let expected_text = "format: aescrypt\n\
+             version: 2\n\
+             cipher: aes-256-cbc\n\
+             kdf: aescrypt-sha256\n\
+             kdf_iterations: 8192\n\
+             extensions: 2\n\
+             created_by: aescrypt 3.16.1\n\
+             authenticated: false\n";
+        assert_eq!(metadata_text(&meta), expected_text);
+    }
+
+    #[test]
+    fn aescrypt_rows_blank_created_by_when_absent() {
+        use symcrypt_core::{AesCryptHeader, AesCryptKdf, Metadata};
+        let meta = Metadata::AesCrypt(AesCryptHeader {
+            version: 1,
+            kdf: AesCryptKdf::Sha256 { iterations: 8192 },
+            extension_count: 0,
+            created_by: None,
+        });
+        let rows = metadata_rows(&meta);
+        let by_key = |k: &str| rows.iter().find(|r| r.key == k).unwrap().value.as_str();
+        assert_eq!(by_key("created_by"), "");
+        assert_eq!(by_key("extensions"), "0");
+        assert_eq!(by_key("version"), "1");
     }
 
     #[test]

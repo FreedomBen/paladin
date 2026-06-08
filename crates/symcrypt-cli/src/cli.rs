@@ -21,7 +21,13 @@ pub enum Mode {
     name = "symcrypt",
     version,
     about = "Simple, safe symmetric file encryption.",
-    long_about = None,
+    long_about = "Simple, safe symmetric file encryption.\n\n\
+        Decrypt (-d), verify (--verify), and info (-i) auto-detect both symcrypt \
+        containers and foreign AES Crypt (.aes) files. Encryption (-e) always \
+        writes symcrypt's own format, never AES Crypt; to migrate a .aes file, \
+        decrypt it and re-encrypt with symcrypt. An AES Crypt key file may be \
+        supplied via --password-file only when it is valid UTF-8 text (symcrypt \
+        keyfiles, -k, do not apply to .aes files)."
 )]
 #[command(group(
     ArgGroup::new("mode")
@@ -32,13 +38,13 @@ pub struct Cli {
     /// Encrypt FILE to an output container.
     #[arg(short = 'e', long)]
     pub encrypt: bool,
-    /// Decrypt FILE to its plaintext.
+    /// Decrypt FILE to its plaintext (symcrypt or AES Crypt `.aes`, auto-detected).
     #[arg(short = 'd', long)]
     pub decrypt: bool,
-    /// Print unauthenticated header metadata; no password needed.
+    /// Print unauthenticated header metadata; no password needed (symcrypt or AES Crypt).
     #[arg(short = 'i', long)]
     pub info: bool,
-    /// Decrypt-and-discard to verify integrity and password.
+    /// Decrypt-and-discard to verify integrity and password (symcrypt or AES Crypt).
     #[arg(long)]
     pub verify: bool,
 
@@ -53,7 +59,8 @@ pub struct Cli {
     /// Password inline (discouraged; see DESIGN §11).
     #[arg(short = 'p', long, value_name = "PW")]
     pub password: Option<OsString>,
-    /// Read the password from a file (one trailing newline trimmed).
+    /// Read the password from a file (one trailing newline trimmed). For an AES
+    /// Crypt `.aes` file this must be valid UTF-8 text.
     #[arg(long, value_name = "FILE")]
     pub password_file: Option<PathBuf>,
     /// Read the password from an environment variable.
@@ -62,7 +69,8 @@ pub struct Cli {
     /// Use an empty password; valid only with `-k`.
     #[arg(long)]
     pub no_password: bool,
-    /// Keyfile material combined with the password source; `-` rejected.
+    /// Keyfile material combined with the password source; `-` rejected. Applies
+    /// to symcrypt files only — not to AES Crypt `.aes` files.
     #[arg(short = 'k', long, value_name = "FILE")]
     pub keyfile: Option<PathBuf>,
 

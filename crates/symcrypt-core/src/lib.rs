@@ -11,22 +11,38 @@
 
 use std::io::{Read, Write};
 
+mod aescrypt;
 mod armor;
 mod cipher;
 mod error;
+mod format;
 mod header;
 mod kdf;
 mod paths;
 mod secret;
 mod stream;
 
+pub use aescrypt::{AesCryptHeader, AesCryptKdf};
 pub use cipher::CipherId;
 pub use error::{Result, SymError};
 pub use header::{Header, NameStatus};
 pub use kdf::{KdfId, KdfParams};
-pub use paths::{default_decrypt_output, default_encrypt_output};
+pub use paths::{default_aescrypt_output, default_decrypt_output, default_encrypt_output};
 pub use secret::{Secret, KEYFILE_MAX_BYTES};
 pub use stream::{EncryptOptions, OnProgress, Progress};
+
+use format::Format;
+
+/// Unauthenticated metadata for whichever container [`inspect`] recognized
+/// (PLAN_05 §3.2). `decrypt`/`verify` keep identical signatures and dispatch
+/// internally; only `inspect`'s return type widens to describe two formats.
+#[derive(Debug, Clone)]
+pub enum Metadata {
+    /// A native symcrypt container.
+    Symcrypt(Header),
+    /// A foreign AES Crypt container (read interop; unauthenticated).
+    AesCrypt(AesCryptHeader),
+}
 
 /// Encrypt `input` to `output`, writing a self-describing authenticated
 /// container. With `opts.armor`, the binary container is wrapped in ASCII armor
@@ -51,8 +67,9 @@ pub fn encrypt<R: Read, W: Write>(
 }
 
 /// Decrypt `input` to `output`, verifying every authentication tag. Armor is
-/// auto-detected and stripped (DESIGN §5.6). A failed tag is reported as the
-/// single [`SymError::Auth`] condition.
+/// auto-detected and stripped (DESIGN §5.6); the container format (symcrypt or
+/// AES Crypt) is then auto-detected (PLAN_05 §3.1). A failed tag is reported as
+/// the single [`SymError::Auth`] condition for either format.
 pub fn decrypt<R: Read, W: Write>(
     input: R,
     output: W,
@@ -60,28 +77,37 @@ pub fn decrypt<R: Read, W: Write>(
     input_len: Option<u64>,
     on_progress: &mut OnProgress<'_>,
 ) -> Result<()> {
-    let reader = armor::auto_dearmor(input)?;
-    stream::decrypt(reader, output, secret, input_len, on_progress)
+    let (format, reader) = format::detect(armor::auto_dearmor(input)?)?;
+    match format {
+        Format::Symcrypt => stream::decrypt(reader, output, secret, input_len, on_progress),
+        Format::AesCrypt => aescrypt::decrypt(reader, output, secret, input_len, on_progress),
+    }
 }
 
-/// Parse and return the **unauthenticated** header metadata, auto-detecting
-/// armor. Powers `--info`; needs no secret and authenticates nothing (DESIGN
-/// §6.2).
-pub fn inspect<R: Read>(input: R) -> Result<Header> {
-    let mut reader = armor::auto_dearmor(input)?;
-    header::parse(&mut reader)
+/// Parse and return the **unauthenticated** metadata for whichever container is
+/// recognized, auto-detecting armor and format. Powers `--info`; needs no secret
+/// and authenticates nothing (DESIGN §6.2, PLAN_05 §3.2).
+pub fn inspect<R: Read>(input: R) -> Result<Metadata> {
+    let (format, mut reader) = format::detect(armor::auto_dearmor(input)?)?;
+    match format {
+        Format::Symcrypt => Ok(Metadata::Symcrypt(header::parse(&mut reader)?)),
+        Format::AesCrypt => Ok(Metadata::AesCrypt(aescrypt::inspect(reader)?)),
+    }
 }
 
 /// Verify integrity and the secret by decrypting and discarding the plaintext
-/// (DESIGN §6.2). Armor is auto-detected.
+/// (DESIGN §6.2). Armor and container format are auto-detected.
 pub fn verify<R: Read>(
     input: R,
     secret: &Secret,
     input_len: Option<u64>,
     on_progress: &mut OnProgress<'_>,
 ) -> Result<()> {
-    let reader = armor::auto_dearmor(input)?;
-    stream::verify(reader, secret, input_len, on_progress)
+    let (format, reader) = format::detect(armor::auto_dearmor(input)?)?;
+    match format {
+        Format::Symcrypt => stream::verify(reader, secret, input_len, on_progress),
+        Format::AesCrypt => aescrypt::verify(reader, secret, input_len, on_progress),
+    }
 }
 
 #[cfg(test)]
@@ -137,7 +163,9 @@ mod tests {
     fn inspect_reports_metadata_without_a_secret() {
         let ct = do_encrypt(b"data", &opts(true, Some("report.pdf")));
         // inspect auto-detects the armor and needs no password.
-        let header = inspect(ct.as_slice()).unwrap();
+        let Metadata::Symcrypt(header) = inspect(ct.as_slice()).unwrap() else {
+            panic!("expected a symcrypt container");
+        };
         assert_eq!(header.cipher, CipherId::ChaCha20Poly1305);
         assert_eq!(header.kdf(), KdfId::Pbkdf2);
         assert_eq!(header.name_status, NameStatus::Present);
@@ -195,6 +223,48 @@ mod tests {
             &mut cb,
         )
         .unwrap();
-        assert!(inspect(out.as_slice()).unwrap().keyfile_hint());
+        let Metadata::Symcrypt(header) = inspect(out.as_slice()).unwrap() else {
+            panic!("expected a symcrypt container");
+        };
+        assert!(header.keyfile_hint());
+    }
+
+    // A genuine AES Crypt fixture, exercised through the public API so the
+    // armor -> format-detect -> aescrypt dispatch is covered end to end.
+    const AESCRYPT_V2: &[u8] = include_bytes!("../tests/data/aescrypt/v2_size_17.aes");
+
+    #[test]
+    fn public_api_decrypts_and_inspects_an_aescrypt_file() {
+        let pw = Secret::new(b"aescrypt test password", None).unwrap();
+
+        let mut out = Vec::new();
+        let mut cb = noop();
+        decrypt(AESCRYPT_V2, &mut out, &pw, None, &mut cb).unwrap();
+        assert_eq!(out, (0..17).map(|i| i as u8).collect::<Vec<_>>());
+
+        let mut cb = noop();
+        assert!(verify(AESCRYPT_V2, &pw, None, &mut cb).is_ok());
+
+        let Metadata::AesCrypt(meta) = inspect(AESCRYPT_V2).unwrap() else {
+            panic!("expected an AES Crypt container");
+        };
+        assert_eq!(meta.version, 2);
+        assert_eq!(meta.created_by.as_deref(), Some("aescrypt 3.16.1"));
+    }
+
+    #[test]
+    fn unrecognized_input_is_bad_magic_through_public_api() {
+        let mut out = Vec::new();
+        let mut cb = noop();
+        assert!(matches!(
+            decrypt(
+                b"not a container".as_ref(),
+                &mut out,
+                &secret(),
+                None,
+                &mut cb
+            ),
+            Err(SymError::BadMagic)
+        ));
     }
 }

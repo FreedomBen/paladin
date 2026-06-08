@@ -27,8 +27,11 @@ pub fn user_message(err: &SymError) -> String {
         SymError::Auth => {
             "Wrong password, or the file is corrupted or has been tampered with.".to_string()
         }
-        SymError::BadMagic => "This is not a symcrypt file.".to_string(),
+        SymError::BadMagic => "This is not a recognized symcrypt or AES Crypt file.".to_string(),
         SymError::UnsupportedVersion(v) => format!("Unsupported symcrypt file version ({v:#04x})."),
+        SymError::UnsupportedAesCryptVersion(v) => {
+            format!("Unsupported AES Crypt file version ({v:#04x}).")
+        }
         SymError::UnknownCipher(id) => {
             format!("This file uses a cipher this version doesn't support (id {id:#04x}).")
         }
@@ -70,6 +73,7 @@ mod tests {
             SymError::Auth,
             SymError::BadMagic,
             SymError::UnsupportedVersion(0x99),
+            SymError::UnsupportedAesCryptVersion(0x03),
             SymError::UnknownCipher(0x07),
             SymError::UnknownKdf(0x42),
             SymError::ReservedFlags(0xfc),
@@ -124,7 +128,7 @@ mod tests {
     fn bad_magic_message_is_exact() {
         assert_eq!(
             user_message(&SymError::BadMagic),
-            "This is not a symcrypt file."
+            "This is not a recognized symcrypt or AES Crypt file."
         );
     }
 
@@ -132,6 +136,16 @@ mod tests {
     fn unsupported_version_includes_hex() {
         let msg = user_message(&SymError::UnsupportedVersion(0x99));
         assert!(msg.contains("0x99"), "missing hex version in {msg:?}");
+    }
+
+    #[test]
+    fn unsupported_aescrypt_version_includes_hex_and_names_aes_crypt() {
+        let msg = user_message(&SymError::UnsupportedAesCryptVersion(0x03));
+        assert!(msg.contains("0x03"), "missing hex version in {msg:?}");
+        assert!(
+            msg.contains("AES Crypt"),
+            "should name AES Crypt in {msg:?}"
+        );
     }
 
     #[test]
@@ -195,6 +209,7 @@ mod tests {
         assert!(!is_user_cancel(&SymError::Auth));
         assert!(!is_user_cancel(&SymError::BadMagic));
         assert!(!is_user_cancel(&SymError::UnsupportedVersion(0x02)));
+        assert!(!is_user_cancel(&SymError::UnsupportedAesCryptVersion(0x03)));
         assert!(!is_user_cancel(&SymError::UnknownCipher(0x09)));
         assert!(!is_user_cancel(&SymError::UnknownKdf(0x09)));
         assert!(!is_user_cancel(&SymError::ReservedFlags(0xfc)));

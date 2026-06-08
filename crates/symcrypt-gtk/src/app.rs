@@ -20,8 +20,8 @@ use relm4::{Component, ComponentParts, ComponentSender};
 use zeroize::Zeroizing;
 
 use symcrypt_core::{
-    default_decrypt_output, default_encrypt_output, inspect, CipherId, EncryptOptions, KdfId,
-    Progress, Secret,
+    default_aescrypt_output, default_decrypt_output, default_encrypt_output, inspect, CipherId,
+    EncryptOptions, KdfId, Metadata, Progress, Secret,
 };
 
 use crate::fsio::{self, FsError};
@@ -236,8 +236,12 @@ impl AppModel {
                 self.output = Some(default_encrypt_output(&input, self.armor));
             }
             Mode::Decrypt => match Self::inspect_path(&input) {
-                Ok(header) => {
-                    self.output = Some(default_decrypt_output(&input, &header));
+                Ok(meta) => {
+                    let out = match meta {
+                        Metadata::Symcrypt(h) => default_decrypt_output(&input, &h),
+                        Metadata::AesCrypt(_) => default_aescrypt_output(&input),
+                    };
+                    self.output = Some(out);
                 }
                 Err(_) => {
                     self.output = None;
@@ -248,8 +252,9 @@ impl AppModel {
         }
     }
 
-    /// Open `path` and run the core `inspect`, returning its header.
-    fn inspect_path(path: &Path) -> Result<symcrypt_core::Header, ()> {
+    /// Open `path` and run the core `inspect`, returning its metadata (symcrypt
+    /// or AES Crypt).
+    fn inspect_path(path: &Path) -> Result<Metadata, ()> {
         let file = std::fs::File::open(path).map_err(|_| ())?;
         inspect(std::io::BufReader::new(file)).map_err(|_| ())
     }
@@ -264,7 +269,7 @@ impl AppModel {
         }
         match self.input.clone() {
             Some(input) => match Self::open_and_inspect(&input) {
-                Ok(header) => self.info_text = Some(info::header_text(&header)),
+                Ok(meta) => self.info_text = Some(info::metadata_text(&meta)),
                 Err(e) => {
                     self.info_text = None;
                     self.toast(&message::user_message(&e));
@@ -927,7 +932,7 @@ impl AppModel {
                 return;
             };
             match Self::open_and_inspect(&input) {
-                Ok(header) => self.info_text = Some(info::header_text(&header)),
+                Ok(meta) => self.info_text = Some(info::metadata_text(&meta)),
                 Err(e) => self.toast(&message::user_message(&e)),
             }
             return;
@@ -1031,7 +1036,7 @@ impl AppModel {
 
     /// Open `path` and run the core `inspect`, surfacing the [`SymError`] so the
     /// caller can render it via [`message::user_message`].
-    fn open_and_inspect(path: &Path) -> Result<symcrypt_core::Header, symcrypt_core::SymError> {
+    fn open_and_inspect(path: &Path) -> Result<Metadata, symcrypt_core::SymError> {
         let file = std::fs::File::open(path).map_err(symcrypt_core::SymError::Io)?;
         inspect(std::io::BufReader::new(file))
     }

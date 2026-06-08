@@ -95,23 +95,36 @@ fn run_encrypt(cli: &Cli, cancel: &Arc<AtomicBool>) -> AppResult<()> {
 }
 
 /// Decrypt `<FILE>` → output (DESIGN §6.5). Without `-o` the stored/derived name
-/// requires peeking the header first.
+/// requires peeking the header first; the same peek detects an AES Crypt input so
+/// the `.aes` suffix is stripped and a keyfile/`--no-password` secret is rejected
+/// with a clear message before prompting (PLAN_05 §6).
 fn run_decrypt(cli: &Cli, cancel: &Arc<AtomicBool>) -> AppResult<()> {
     let input_path = cli.file.as_path();
 
     let target = match &cli.output {
-        Some(out) => out.clone(),
+        Some(out) => {
+            // -o given: no name peek is needed, but still pre-reject a
+            // keyfile/no-password secret against an AES Crypt input.
+            precheck_aescrypt_keyfile(cli, input_path)?;
+            out.clone()
+        }
         None if is_stdio(input_path) => {
             return Err(AppError::usage(
                 "decrypting from stdin requires -o/--output",
             ));
         }
         None => {
-            // Peek the (unauthenticated) header to derive the default name, then
-            // re-open for the actual decrypt pass.
+            // Peek the (unauthenticated) metadata to derive the default name and
+            // detect the format, then re-open for the actual decrypt pass.
             let mut peek = open_input(input_path)?;
-            let header = core::inspect(&mut *peek)?;
-            core::default_decrypt_output(input_path, &header)
+            let meta = core::inspect(&mut *peek)?;
+            if keyfile_or_no_password(cli) && matches!(meta, core::Metadata::AesCrypt(_)) {
+                return Err(aescrypt_keyfile_usage());
+            }
+            match meta {
+                core::Metadata::Symcrypt(h) => core::default_decrypt_output(input_path, &h),
+                core::Metadata::AesCrypt(_) => core::default_aescrypt_output(input_path),
+            }
         }
     };
 
@@ -144,6 +157,9 @@ fn run_decrypt(cli: &Cli, cancel: &Arc<AtomicBool>) -> AppResult<()> {
 /// output is written; success is exit 0, a bad tag maps to exit 3.
 fn run_verify(cli: &Cli, cancel: &Arc<AtomicBool>) -> AppResult<()> {
     let input_path = cli.file.as_path();
+    // Pre-reject a keyfile/no-password secret against an AES Crypt input before
+    // prompting or reading the keyfile (PLAN_05 §6).
+    precheck_aescrypt_keyfile(cli, input_path)?;
     let (mut input, input_len) = open_main_input(input_path)?;
     let sct = secret::resolve_secret(cli, false)?;
 
@@ -162,8 +178,36 @@ fn run_verify(cli: &Cli, cancel: &Arc<AtomicBool>) -> AppResult<()> {
 /// file; the block goes to stdout and is not suppressed by `--quiet`.
 fn run_info(cli: &Cli) -> AppResult<()> {
     let mut input = open_input(cli.file.as_path())?;
-    let header = core::inspect(&mut *input)?;
-    print!("{}", info::format_info(&header));
+    let meta = core::inspect(&mut *input)?;
+    print!("{}", info::format_info(&meta));
+    Ok(())
+}
+
+/// Whether the user supplied a keyfile or `--no-password` — a secret shape an
+/// AES Crypt input cannot use (it has no symcrypt-style keyfile component).
+fn keyfile_or_no_password(cli: &Cli) -> bool {
+    cli.keyfile.is_some() || cli.no_password
+}
+
+/// The usage error for a keyfile/`--no-password` secret against a `.aes` file.
+fn aescrypt_keyfile_usage() -> AppError {
+    AppError::usage(
+        "AES Crypt files don't use symcrypt keyfiles; use a UTF-8 --password-file for a compatible AES Crypt key file",
+    )
+}
+
+/// Pre-reject a keyfile/`--no-password` secret against a non-stdin AES Crypt
+/// input, before prompting or reading the keyfile (PLAN_05 §6). Stdin cannot be
+/// pre-inspected without buffering, so it keeps the core `InvalidOptions`
+/// backstop. A non-keyfile/non-`--no-password` invocation needs no pre-check.
+fn precheck_aescrypt_keyfile(cli: &Cli, input_path: &Path) -> AppResult<()> {
+    if is_stdio(input_path) || !keyfile_or_no_password(cli) {
+        return Ok(());
+    }
+    let mut peek = open_input(input_path)?;
+    if matches!(core::inspect(&mut *peek)?, core::Metadata::AesCrypt(_)) {
+        return Err(aescrypt_keyfile_usage());
+    }
     Ok(())
 }
 

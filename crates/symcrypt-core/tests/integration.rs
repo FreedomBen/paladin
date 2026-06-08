@@ -7,12 +7,21 @@ use std::ops::ControlFlow;
 use std::path::Path;
 
 use symcrypt_core::{
-    decrypt, default_decrypt_output, default_encrypt_output, encrypt, inspect, verify, CipherId,
-    EncryptOptions, KdfId, KdfParams, NameStatus, Progress, Secret, SymError,
+    decrypt, default_aescrypt_output, default_decrypt_output, default_encrypt_output, encrypt,
+    inspect, verify, CipherId, EncryptOptions, Header, KdfId, KdfParams, Metadata, NameStatus,
+    Progress, Secret, SymError,
 };
 
 fn noop() -> impl FnMut(Progress) -> ControlFlow<()> {
     |_| ControlFlow::Continue(())
+}
+
+/// Inspect and unwrap the symcrypt header, asserting the container is native.
+fn symcrypt_header(ct: &[u8]) -> Header {
+    match inspect(ct).unwrap() {
+        Metadata::Symcrypt(h) => h,
+        Metadata::AesCrypt(_) => panic!("expected a symcrypt container"),
+    }
 }
 
 fn secret() -> Secret {
@@ -104,7 +113,7 @@ fn inspect_reads_metadata_from_armored_without_a_secret() {
             Some("notes.txt"),
         ),
     );
-    let header = inspect(ct.as_slice()).unwrap();
+    let header = symcrypt_header(ct.as_slice());
     assert_eq!(header.version, 1);
     assert_eq!(header.cipher, CipherId::ChaCha20Poly1305);
     assert_eq!(header.kdf(), KdfId::Argon2id);
@@ -173,7 +182,7 @@ fn default_output_paths_compose_with_inspect() {
         b"x",
         &options(CipherId::Aes256Gcm, KdfId::Pbkdf2, false, Some("real.txt")),
     );
-    let header = inspect(ct.as_slice()).unwrap();
+    let header = symcrypt_header(ct.as_slice());
     assert_eq!(
         default_decrypt_output(Path::new("dir/secret.symcrypt"), &header),
         Path::new("dir/real.txt")
@@ -184,7 +193,7 @@ fn default_output_paths_compose_with_inspect() {
         b"x",
         &options(CipherId::Aes256Gcm, KdfId::Pbkdf2, false, None),
     );
-    let header = inspect(ct.as_slice()).unwrap();
+    let header = symcrypt_header(ct.as_slice());
     assert_eq!(
         default_decrypt_output(Path::new("dir/secret.symcrypt"), &header),
         Path::new("dir/secret")
@@ -220,7 +229,7 @@ fn keyfile_round_trips_and_sets_the_hint() {
     )
     .unwrap();
 
-    assert!(inspect(ct.as_slice()).unwrap().keyfile_hint());
+    assert!(symcrypt_header(ct.as_slice()).keyfile_hint());
 
     // Decryptable only with the keyfile.
     let mut out = Vec::new();
@@ -233,5 +242,44 @@ fn keyfile_round_trips_and_sets_the_hint() {
     assert!(matches!(
         decrypt(ct.as_slice(), &mut Vec::new(), &no_kf, None, &mut cb),
         Err(SymError::Auth)
+    ));
+}
+
+/// A genuine AES Crypt Stream Format 2 fixture (`aescrypt 3.16.1`), exercised
+/// through the public API the front-ends call: decrypt, verify, inspect, and the
+/// `.aes` output-path helper all compose without a format flag.
+#[test]
+fn aescrypt_file_decrypts_inspects_and_strips_suffix() {
+    const AESCRYPT_V2: &[u8] = include_bytes!("data/aescrypt/v2_size_17.aes");
+    let pw = Secret::new(b"aescrypt test password", None).unwrap();
+
+    let mut out = Vec::new();
+    let mut cb = noop();
+    decrypt(AESCRYPT_V2, &mut out, &pw, None, &mut cb).unwrap();
+    assert_eq!(out, (0..17u8).collect::<Vec<_>>());
+
+    let mut cb = noop();
+    assert!(verify(AESCRYPT_V2, &pw, None, &mut cb).is_ok());
+
+    match inspect(AESCRYPT_V2).unwrap() {
+        Metadata::AesCrypt(meta) => {
+            assert_eq!(meta.version, 2);
+            assert_eq!(meta.kdf.name(), "aescrypt-sha256");
+            assert_eq!(meta.created_by.as_deref(), Some("aescrypt 3.16.1"));
+        }
+        Metadata::Symcrypt(_) => panic!("expected an AES Crypt container"),
+    }
+
+    assert_eq!(
+        default_aescrypt_output(Path::new("dir/secret.aes")),
+        Path::new("dir/secret")
+    );
+
+    // A keyfile-bearing secret against a .aes file is a usage error.
+    let kf = Secret::new(b"aescrypt test password", Some(b"k")).unwrap();
+    let mut cb = noop();
+    assert!(matches!(
+        decrypt(AESCRYPT_V2, &mut Vec::new(), &kf, None, &mut cb),
+        Err(SymError::InvalidOptions(_))
     ));
 }

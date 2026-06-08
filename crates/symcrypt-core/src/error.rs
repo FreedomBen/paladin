@@ -24,13 +24,20 @@ pub enum SymError {
     #[error("authentication failed: wrong password or corrupted/tampered file")]
     Auth,
 
-    /// The input does not begin with the ASCII `SYMCRYPT` magic. Exit code 4.
-    #[error("not a symcrypt file (bad magic)")]
+    /// The input begins with neither the symcrypt `SYMCRYPT` magic nor the AES
+    /// Crypt `AES` magic. Exit code 4.
+    #[error("not a recognized symcrypt or AES Crypt file (bad magic)")]
     BadMagic,
 
     /// The header `version` byte is not understood by this build. Exit code 4.
     #[error("unsupported symcrypt version: {0:#04x}")]
     UnsupportedVersion(u8),
+
+    /// An AES Crypt container carries a stream-format `version` this build does
+    /// not read (only AES Crypt versions 1 and 2 are supported; version 3 is not
+    /// yet implemented). Exit code 4.
+    #[error("unsupported AES Crypt version: {0:#04x}")]
+    UnsupportedAesCryptVersion(u8),
 
     /// The header names a `cipher_id` this build does not implement. Exit code 4.
     #[error("unknown cipher id: {0:#04x}")]
@@ -136,6 +143,19 @@ mod tests {
             SymError::UnsupportedVersion(0x99).to_string(),
             "unsupported symcrypt version: 0x99"
         );
+        assert_eq!(
+            SymError::UnsupportedAesCryptVersion(0x03).to_string(),
+            "unsupported AES Crypt version: 0x03"
+        );
+    }
+
+    #[test]
+    fn bad_magic_message_is_format_neutral() {
+        // Foreign inputs are now classified after checking both magics, so the
+        // message must name neither format as the sole expectation.
+        let msg = SymError::BadMagic.to_string();
+        assert!(msg.contains("symcrypt"));
+        assert!(msg.contains("AES Crypt"));
     }
 
     #[test]
