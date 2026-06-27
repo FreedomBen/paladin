@@ -1,6 +1,6 @@
 # Golden ciphertexts (on-disk format lock)
 
-These files are **committed ciphertexts** produced by a known `symcrypt` build.
+These files are **committed ciphertexts** produced by a known `paladin` build.
 The end-to-end suite (`tests/e2e/cases/backward_compat_test.rb`) decrypts them on
 every run, so if a future change alters the on-disk format
 (`docs/DESIGN.md` §5) in a way that breaks old files, a test fails instead of the
@@ -11,14 +11,14 @@ breakage shipping silently.
 | File                                  | Cipher            | KDF      | Notes                          |
 | ------------------------------------- | ----------------- | -------- | ------------------------------ |
 | `plaintext.txt`                       | —                 | —        | Canonical plaintext (the source) |
-| `aes-256-gcm.argon2id.symcrypt`       | aes-256-gcm       | argon2id | default costs                  |
-| `aes-256-gcm.scrypt.symcrypt`         | aes-256-gcm       | scrypt   | default costs                  |
-| `aes-256-gcm.pbkdf2.symcrypt`         | aes-256-gcm       | pbkdf2   | default costs                  |
-| `chacha20-poly1305.argon2id.symcrypt` | chacha20-poly1305 | argon2id | default costs                  |
-| `chacha20-poly1305.scrypt.symcrypt`   | chacha20-poly1305 | scrypt   | default costs                  |
-| `chacha20-poly1305.pbkdf2.symcrypt`   | chacha20-poly1305 | pbkdf2   | default costs                  |
-| `armored.symcrypt.asc`                | aes-256-gcm       | argon2id | ASCII-armored                  |
-| `stdin_no_name.symcrypt`              | aes-256-gcm       | pbkdf2   | encrypted from stdin; no stored filename |
+| `aes-256-gcm.argon2id.paladin`       | aes-256-gcm       | argon2id | default costs                  |
+| `aes-256-gcm.scrypt.paladin`         | aes-256-gcm       | scrypt   | default costs                  |
+| `aes-256-gcm.pbkdf2.paladin`         | aes-256-gcm       | pbkdf2   | default costs                  |
+| `chacha20-poly1305.argon2id.paladin` | chacha20-poly1305 | argon2id | default costs                  |
+| `chacha20-poly1305.scrypt.paladin`   | chacha20-poly1305 | scrypt   | default costs                  |
+| `chacha20-poly1305.pbkdf2.paladin`   | chacha20-poly1305 | pbkdf2   | default costs                  |
+| `armored.paladin.asc`                | aes-256-gcm       | argon2id | ASCII-armored                  |
+| `stdin_no_name.paladin`              | aes-256-gcm       | pbkdf2   | encrypted from stdin; no stored filename |
 
 Each ciphertext decrypts to `plaintext.txt`. They are generated with **default
 KDF costs**, so the test also pins the shipped defaults
@@ -26,7 +26,7 @@ KDF costs**, so the test also pins the shipped defaults
 
 ## Fixed parameters
 
-- **Password:** `symcrypt golden v1` (public on purpose — these files protect
+- **Password:** `paladin golden v1` (public on purpose — these files protect
   nothing; they exist only to be decrypted by the test).
 - **Plaintext:** `plaintext.txt` in this directory.
 
@@ -40,7 +40,7 @@ Regenerate only when you have intentionally changed the format or defaults, and
 land the result in its own reviewed commit:
 
 ```sh
-cargo build -p symcrypt-cli
+cargo build -p paladin-cli
 ruby tests/e2e/regenerate_goldens.rb --force   # --force is required to overwrite
 git add tests/fixtures/golden && git diff --cached --stat
 ```

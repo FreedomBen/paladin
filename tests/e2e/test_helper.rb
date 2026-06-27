@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 #
-# Shared foundation for the symcrypt CLI end-to-end suite.
+# Shared foundation for the paladin CLI end-to-end suite.
 #
 # Every case file does `require "test_helper"` and subclasses E2ETest. Tests run
-# against the REAL built binary (resolved from SYMCRYPT_BIN, otherwise the
-# workspace debug build) through the `symcrypt` helper, so they exercise the tool
+# against the REAL built binary (resolved from PALADIN_BIN, otherwise the
+# workspace debug build) through the `paladin` helper, so they exercise the tool
 # exactly as a user would from a shell.
 #
 # We deliberately stick to pure-Ruby stdlib (minitest, open3, tmpdir, fileutils)
@@ -16,17 +16,17 @@ require "open3"
 require "tmpdir"
 require "fileutils"
 
-module Symcrypt
+module Paladin
   E2E_DIR        = __dir__
   WORKSPACE_ROOT = File.expand_path("../..", __dir__) # tests/e2e -> repo root
   FIXTURES_DIR   = File.expand_path("../fixtures", __dir__) # -> tests/fixtures
   LOREM          = File.join(FIXTURES_DIR, "LOREM_IPSUM.txt")
   GOLDEN_DIR     = File.join(FIXTURES_DIR, "golden")
 
-  # Path to the CLI binary under test. Override with SYMCRYPT_BIN to test, e.g.,
+  # Path to the CLI binary under test. Override with PALADIN_BIN to test, e.g.,
   # a release build or an installed copy.
   def self.binary
-    ENV["SYMCRYPT_BIN"] || File.join(WORKSPACE_ROOT, "target", "debug", "symcrypt")
+    ENV["PALADIN_BIN"] || File.join(WORKSPACE_ROOT, "target", "debug", "paladin")
   end
 
   # Outcome of one CLI invocation. `status` is the process exit code.
@@ -47,7 +47,7 @@ class E2ETest < Minitest::Test
   FAST_KDF = %w[--kdf pbkdf2 --pbkdf2-iterations 10000].freeze
 
   def setup
-    @tmpdir = Dir.mktmpdir("symcrypt-e2e-")
+    @tmpdir = Dir.mktmpdir("paladin-e2e-")
   end
 
   def teardown
@@ -56,18 +56,18 @@ class E2ETest < Minitest::Test
 
   # --- invoking the CLI ----------------------------------------------------
 
-  # Run the binary with the given args. Returns Symcrypt::Result and never raises
+  # Run the binary with the given args. Returns Paladin::Result and never raises
   # on a non-zero exit (assert on result.status yourself). Examples:
-  #   symcrypt("--encrypt", input, "-o", out,
+  #   paladin("--encrypt", input, "-o", out,
   #            "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
-  #   symcrypt("-e", "-", stdin: data)   # read stdin, write stdout
-  def symcrypt(*args, stdin: nil, env: {})
+  #   paladin("-e", "-", stdin: data)   # read stdin, write stdout
+  def paladin(*args, stdin: nil, env: {})
     str_env = env.transform_keys(&:to_s).transform_values(&:to_s)
     out, err, status = Open3.capture3(
-      str_env, Symcrypt.binary, *args.map(&:to_s),
+      str_env, Paladin.binary, *args.map(&:to_s),
       stdin_data: stdin.nil? ? "" : stdin, binmode: true
     )
-    Symcrypt::Result.new(status: status.exitstatus, stdout: out, stderr: err)
+    Paladin::Result.new(status: status.exitstatus, stdout: out, stderr: err)
   end
 
   # --- building inputs -----------------------------------------------------

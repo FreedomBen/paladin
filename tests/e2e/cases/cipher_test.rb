@@ -16,15 +16,15 @@ class CipherTest < E2ETest
     env = { "PW" => DEFAULT_PASSWORD }
     CIPHERS.each do |cipher|
       input  = write_input("p_#{cipher}.txt", "payload for #{cipher}\n" * 8)
-      cipher_file = tmp("c_#{cipher}.symcrypt")
+      cipher_file = tmp("c_#{cipher}.paladin")
       out    = tmp("d_#{cipher}.txt")
 
-      enc = symcrypt("-e", input, "-o", cipher_file, "--cipher", cipher, *FAST_KDF,
+      enc = paladin("-e", input, "-o", cipher_file, "--cipher", cipher, *FAST_KDF,
                      "--password-env", "PW", env: env)
       assert_status enc, 0, "encrypt with #{cipher} failed: #{enc.stderr}"
 
       # No --cipher on decrypt: the header must carry it.
-      dec = symcrypt("-d", cipher_file, "-o", out, "--password-env", "PW", env: env)
+      dec = paladin("-d", cipher_file, "-o", out, "--password-env", "PW", env: env)
       assert_status dec, 0, "header-driven decrypt for #{cipher} failed"
       assert_identical input, out
     end
@@ -33,10 +33,10 @@ class CipherTest < E2ETest
   # `--info` names each cipher; the line is a stable contract front-ends parse.
   def test_info_reports_each_cipher
     CIPHERS.each do |cipher|
-      cipher_file = tmp("c_#{cipher}.symcrypt")
-      symcrypt("-e", Symcrypt::LOREM, "-o", cipher_file, "--cipher", cipher, *FAST_KDF,
+      cipher_file = tmp("c_#{cipher}.paladin")
+      paladin("-e", Paladin::LOREM, "-o", cipher_file, "--cipher", cipher, *FAST_KDF,
                "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
-      info = symcrypt("-i", cipher_file)
+      info = paladin("-i", cipher_file)
       assert_status info, 0
       assert_includes info.stdout, "cipher: #{cipher}\n", "info should name #{cipher}"
     end
@@ -47,12 +47,12 @@ class CipherTest < E2ETest
     input = make_input("big.bin", (3 * CHUNK) + 17)
     env   = { "PW" => DEFAULT_PASSWORD }
     CIPHERS.each do |cipher|
-      cipher_file = tmp("big_#{cipher}.symcrypt")
+      cipher_file = tmp("big_#{cipher}.paladin")
       out = tmp("big_#{cipher}.out")
-      enc = symcrypt("-e", input, "-o", cipher_file, "--cipher", cipher, *FAST_KDF,
+      enc = paladin("-e", input, "-o", cipher_file, "--cipher", cipher, *FAST_KDF,
                      "--password-env", "PW", env: env)
       assert_status enc, 0
-      dec = symcrypt("-d", cipher_file, "-o", out, "--password-env", "PW", env: env)
+      dec = paladin("-d", cipher_file, "-o", out, "--password-env", "PW", env: env)
       assert_status dec, 0
       assert_identical input, out, "multi-chunk round-trip failed for #{cipher}"
     end
@@ -60,7 +60,7 @@ class CipherTest < E2ETest
 
   # An unknown cipher name is a usage error (exit 2), never a guess.
   def test_invalid_cipher_name_is_usage_error
-    res = symcrypt("-e", Symcrypt::LOREM, "-o", tmp("o"), "--cipher", "rot13",
+    res = paladin("-e", Paladin::LOREM, "-o", tmp("o"), "--cipher", "rot13",
                    "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
     assert_failure res, 2, "unknown cipher"
   end
@@ -69,11 +69,11 @@ class CipherTest < E2ETest
   # outright (exit 2), so a flag can never silently override the authenticated
   # header. (The header — not the flag — decides the cipher.)
   def test_decrypt_rejects_cipher_flag
-    cipher_file = tmp("c.symcrypt")
-    symcrypt("-e", Symcrypt::LOREM, "-o", cipher_file, "--cipher", "chacha20-poly1305",
+    cipher_file = tmp("c.paladin")
+    paladin("-e", Paladin::LOREM, "-o", cipher_file, "--cipher", "chacha20-poly1305",
              *FAST_KDF, "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
 
-    res = symcrypt("-d", cipher_file, "-o", tmp("o"), "-c", "aes-256-gcm",
+    res = paladin("-d", cipher_file, "-o", tmp("o"), "-c", "aes-256-gcm",
                    "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
     assert_failure res, 2, "apply only to encrypt"
   end

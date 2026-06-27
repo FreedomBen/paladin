@@ -1,19 +1,19 @@
-# symcrypt — Implementation plan 02: CLI (`symcrypt`)
+# paladin — Implementation plan 02: CLI (`paladin`)
 
 **Status:** Ready for implementation. The two crates this front-end builds on —
-`symcrypt-core` and `symcrypt-common` — are complete (see
+`paladin-core` and `paladin-common` — are complete (see
 [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md)), so the design
 is stable enough to expand this from a checklist stub into ordered steps.
 **Last updated:** 2026-05-30.
 
-**Scope.** The `symcrypt` binary (package `symcrypt-cli`) — a thin front-end that
-parses arguments, resolves the password, opens streams, calls `symcrypt-core`,
+**Scope.** The `paladin` binary (package `paladin-cli`) — a thin front-end that
+parses arguments, resolves the password, opens streams, calls `paladin-core`,
 and maps results to exit codes ([DESIGN §6](DESIGN.md#6-cli-specification)). It
 holds **no crypto or format logic**: cipher/KDF names, defaults, output-path
 rules, validation caps, and exit-code mapping all come from the shared crates.
 
 **Depends on:** [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md)
-— `symcrypt-core` (the four operations + pure helpers) and the `symcrypt-common`
+— `paladin-core` (the four operations + pure helpers) and the `paladin-common`
 terminal glue.
 **Sibling plans:** [`IMPLEMENTATION_PLAN_03_TUI.md`](IMPLEMENTATION_PLAN_03_TUI.md),
 [`IMPLEMENTATION_PLAN_04_GTK.md`](IMPLEMENTATION_PLAN_04_GTK.md).
@@ -25,7 +25,7 @@ terminal glue.
 The CLI never re-implements any of the following; it gathers input and calls
 into these APIs. Verified against the current source.
 
-### From `symcrypt-core`
+### From `paladin-core`
 
 | Item                                              | Used by the CLI for                                            |
 | ------------------------------------------------- | -------------------------------------------------------------- |
@@ -39,9 +39,9 @@ into these APIs. Verified against the current source.
 | `Progress`, `OnProgress`                          | Progress-callback payload and signature.                     |
 | `default_encrypt_output` / `default_decrypt_output` | Default `-o` derivation (§6.5); decrypt needs a parsed `Header`. |
 | `KEYFILE_MAX_BYTES`                               | (Already enforced inside `read_keyfile`.)                    |
-| `SymError`                                         | Mapped to exit codes via `symcrypt-common` (never reclassified). |
+| `SymError`                                         | Mapped to exit codes via `paladin-common` (never reclassified). |
 
-### From `symcrypt-common`
+### From `paladin-common`
 
 | Item                                                       | Used by the CLI for                                              |
 | ---------------------------------------------------------- | ---------------------------------------------------------------- |
@@ -64,15 +64,15 @@ into these APIs. Verified against the current source.
 
 ---
 
-## 2. Proposed module layout (`crates/symcrypt-cli/src`)
+## 2. Proposed module layout (`crates/paladin-cli/src`)
 
 Split the stub `main.rs` into small, testable modules. Pure logic (arg
 validation, options assembly, `--info` formatting) is unit-testable without
 spawning a process; end-to-end behavior is covered by `assert_cmd`.
 
 ```
-crates/symcrypt-cli/
-├── Cargo.toml            # add deps (§3); keep [[bin]] name = "symcrypt"
+crates/paladin-cli/
+├── Cargo.toml            # add deps (§3); keep [[bin]] name = "paladin"
 ├── src/
 │   ├── main.rs           # entry: parse → run → map AppError to process::exit
 │   ├── cli.rs            # clap `Cli` derive struct + Mode enum + raw flags
@@ -98,8 +98,8 @@ Per [DESIGN §9](DESIGN.md#9-dependencies). Versions resolved via `cargo add`
 
 | Crate                            | Why                                                            |
 | -------------------------------- | -------------------------------------------------------------- |
-| `symcrypt-core` (path)           | The four operations + helpers.                                |
-| `symcrypt-common` (path)         | Terminal glue + exit-code mapping.                            |
+| `paladin-core` (path)           | The four operations + helpers.                                |
+| `paladin-common` (path)         | Terminal glue + exit-code mapping.                            |
 | `clap` (features = `derive`)     | Argument parsing, `--help`, `--version`.                      |
 | `rpassword`                      | No-echo interactive password prompt.                         |
 | `indicatif`                      | Progress bar on stderr.                                       |
@@ -167,10 +167,10 @@ Each step writes failing tests first, then the code. Phases 1–9 build the bina
 phases).
 
 ### Step 1 — Crate wiring & skeleton
-- Add dependencies (§3); keep `[[bin]] name = "symcrypt"`.
+- Add dependencies (§3); keep `[[bin]] name = "paladin"`.
 - Replace the stub `main.rs` with the module skeleton (§2); `run::dispatch`
   returns `AppResult<()>`; `main` maps the error to a message + `exit_code()`.
-- **Test first:** `symcrypt --version` / `--help` succeed (exit 0) and `--help`
+- **Test first:** `paladin --version` / `--help` succeed (exit 0) and `--help`
   lists every flag in §6.3 (`assert_cmd` + `predicates`).
 
 ### Step 2 — Arg model
@@ -234,7 +234,7 @@ Reject, with `AppError::usage` (exit 2), before any work:
   `Err`, return it (temp file auto-drops; no `--remove`).
 - **`--remove`:** only after `commit()` succeeds — `best_effort_remove(input)`;
   on failure print a stderr warning and still exit 0.
-- **Test first:** default extensions (encrypt `.symcrypt`/`.symcrypt.asc`);
+- **Test first:** default extensions (encrypt `.paladin`/`.paladin.asc`);
   decrypt name from header vs extension-strip vs `.dec`; required `-o` for stdin
   enc/dec; `--remove` rejected with stdin; output-equals-input refusal
   (incl. symlink/hardlink where supported); `0600` temp mode on Unix; temp-file
@@ -299,7 +299,7 @@ Confirms every §6 rule has a home and is not duplicated.
 | Temp-file finalize; `0600`; cleanup on failure            | `common::OutputSink` (drop/commit)           |
 | Stdin requires `-o`; `--remove` rejected with stdin       | `validate.rs` / `run.rs`                     |
 | `--remove` warns-but-exits-0 on delete failure            | `run.rs` + `common::best_effort_remove`      |
-| Size cap, tamper, truncation                              | `symcrypt-core` (CLI just maps the error)    |
+| Size cap, tamper, truncation                              | `paladin-core` (CLI just maps the error)    |
 | Exit-code mapping (`SymError` → 0/1/2/3/4/130)            | `common::exit_code` / `AppError::exit_code`  |
 | SIGINT ⇒ cancel flag ⇒ `Canceled` ⇒ 130                   | `progress.rs` + `main` (`ctrlc`)             |
 
@@ -311,7 +311,7 @@ Stable UTF-8 `key: value` lines to **stdout**, in this exact order; not
 suppressed by `--quiet`. Values come from core display helpers / the `Header`.
 
 ```
-format: symcrypt
+format: paladin
 version: <decimal>
 cipher: <lowercase name>
 kdf: <lowercase name>
@@ -337,9 +337,9 @@ auto-detected by `inspect`. No password is read in this mode.
 From [DESIGN §10](DESIGN.md#10-testing-strategy). One test (or a small table)
 per item:
 
-- Default extensions: encrypt → `.symcrypt` / `.symcrypt.asc`.
+- Default extensions: encrypt → `.paladin` / `.paladin.asc`.
 - Decrypt default output: stored name; extension-strip; `.dec` fallback;
-  empty-basename fallback (`.symcrypt` → `.symcrypt.dec`).
+  empty-basename fallback (`.paladin` → `.paladin.dec`).
 - Required `-o` for stdin encrypt/decrypt; `--remove` rejected with stdin.
 - `--remove` warning-but-success when deletion fails after a good output.
 - Output-equals-input refusal; symlink-resolved and hardlink same-file refusal
@@ -363,7 +363,7 @@ per item:
 - Password bytes via file/env/`--no-password` produce a decryptable file.
 
 After code changes: `cargo fmt`, `cargo clippy --all-targets --all-features`
-(no warnings), `cargo test -p symcrypt-cli`.
+(no warnings), `cargo test -p paladin-cli`.
 
 ---
 
@@ -371,9 +371,9 @@ After code changes: `cargo fmt`, `cargo clippy --all-targets --all-features`
 
 - **`--help`:** mark `-p/--password` discouraged (§11); state `--remove` is a
   plain delete (no secure erase); note armor recommended when stdout is a TTY.
-- **Man page:** `symcrypt(1)` mirroring §6 (consider generating from clap).
-- **`cargo install`:** `cargo install --path crates/symcrypt-cli` installs the
-  `symcrypt` binary; document in the README once it builds.
+- **Man page:** `paladin(1)` mirroring §6 (consider generating from clap).
+- **`cargo install`:** `cargo install --path crates/paladin-cli` installs the
+  `paladin` binary; document in the README once it builds.
 - Update the README's CLI usage/examples to match §6.7 once implemented.
 
 ---
@@ -394,7 +394,7 @@ After code changes: `cargo fmt`, `cargo clippy --all-targets --all-features`
   stderr diagnostics (§4); it is no longer left unspecified.
 - **TTY detection** uses std `IsTerminal` (Rust ≥ 1.70; workspace is 1.94) — no
   extra crate.
-- Everything else is fully determined by `symcrypt-core` + `symcrypt-common`,
+- Everything else is fully determined by `paladin-core` + `paladin-common`,
   which are already implemented and tested.
 
 ---
@@ -411,5 +411,5 @@ After code changes: `cargo fmt`, `cargo clippy --all-targets --all-features`
 - [x] **Step 8** — encrypt / decrypt / verify handlers wired to core.
 - [x] **Step 9** — `info.rs` exact stable `--info` output.
 - [x] **Step 10** — `assert_cmd` integration suite (§8); `fmt` + `clippy` clean.
-- [x] **Step 11** — `--help` text, `symcrypt(1)` man page, `cargo install`, README CLI section.
+- [x] **Step 11** — `--help` text, `paladin(1)` man page, `cargo install`, README CLI section.
 - [x] DESIGN §9 updated: add `ctrlc` (cli); add `cli` to `zeroize`; drop `cli` from `anyhow`.

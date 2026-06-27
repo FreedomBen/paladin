@@ -1660,6 +1660,81 @@ dependencies = [
 ]
 
 [[package]]
+name = "paladin-cli"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "clap",
+ "ctrlc",
+ "indicatif",
+ "paladin-common",
+ "paladin-core",
+ "predicates",
+ "rpassword",
+ "tempfile",
+ "zeroize",
+]
+
+[[package]]
+name = "paladin-common"
+version = "0.1.0"
+dependencies = [
+ "paladin-core",
+ "tempfile",
+ "thiserror 2.0.18",
+ "zeroize",
+]
+
+[[package]]
+name = "paladin-core"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "aes-gcm",
+ "argon2",
+ "base64",
+ "cbc",
+ "chacha20poly1305",
+ "getrandom 0.4.2",
+ "hex",
+ "hmac",
+ "pbkdf2",
+ "scrypt",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "zeroize",
+]
+
+[[package]]
+name = "paladin-gtk"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gtk4",
+ "libadwaita",
+ "paladin-core",
+ "relm4",
+ "relm4-components",
+ "tempfile",
+ "zeroize",
+]
+
+[[package]]
+name = "paladin-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "crossterm",
+ "paladin-common",
+ "paladin-core",
+ "ratatui",
+ "tempfile",
+ "zeroize",
+]
+
+[[package]]
 name = "pango"
 version = "0.22.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2394,81 +2469,6 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
-
-[[package]]
-name = "symcrypt-cli"
-version = "0.1.0"
-dependencies = [
- "assert_cmd",
- "clap",
- "ctrlc",
- "indicatif",
- "predicates",
- "rpassword",
- "symcrypt-common",
- "symcrypt-core",
- "tempfile",
- "zeroize",
-]
-
-[[package]]
-name = "symcrypt-common"
-version = "0.1.0"
-dependencies = [
- "symcrypt-core",
- "tempfile",
- "thiserror 2.0.18",
- "zeroize",
-]
-
-[[package]]
-name = "symcrypt-core"
-version = "0.1.0"
-dependencies = [
- "aes",
- "aes-gcm",
- "argon2",
- "base64",
- "cbc",
- "chacha20poly1305",
- "getrandom 0.4.2",
- "hex",
- "hmac",
- "pbkdf2",
- "scrypt",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.18",
- "zeroize",
-]
-
-[[package]]
-name = "symcrypt-gtk"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "gtk4",
- "libadwaita",
- "relm4",
- "relm4-components",
- "symcrypt-core",
- "tempfile",
- "zeroize",
-]
-
-[[package]]
-name = "symcrypt-tui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "crossterm",
- "ratatui",
- "symcrypt-common",
- "symcrypt-core",
- "tempfile",
- "zeroize",
-]
 
 [[package]]
 name = "syn"

@@ -1,4 +1,4 @@
-# symcrypt CLI — E2E test backlog
+# paladin CLI — E2E test backlog
 
 The backlog of end-to-end cases for the Ruby/minitest suite in `tests/e2e/`.
 Each planned `cases/<name>_test.rb` is a section below; check items off as they
@@ -9,11 +9,11 @@ land. See `README.md` for how to run the suite and add a case.
 
 **Ground rules**
 
-- Black-box only: drive the real built binary via the `symcrypt` helper. Don't
-  re-prove the in-process Rust assertions in `crates/symcrypt-cli/tests/it_*.rs`
+- Black-box only: drive the real built binary via the `paladin` helper. Don't
+  re-prove the in-process Rust assertions in `crates/paladin-cli/tests/it_*.rs`
   (cipher, flags, info, io_errors, roundtrip, secret, stdio) — cover what only a
   full-binary shell test can.
-- Reuse `E2ETest` helpers: `symcrypt`, `make_input`/`write_input`, `flip_byte`,
+- Reuse `E2ETest` helpers: `paladin`, `make_input`/`write_input`, `flip_byte`,
   `set_byte`, `truncate_input`, `assert_status`, `assert_failure`,
   `assert_size_grew`, `assert_identical`, and constants `DEFAULT_PASSWORD`,
   `CHUNK`, `FAST_KDF`.
@@ -22,7 +22,7 @@ land. See `README.md` for how to run the suite and add a case.
 
 **Legend:** `[x]` done · `[ ]` to do · ⚠ resolved-against-binary note.
 
-**Exit codes** (`symcrypt-common/src/error.rs`)
+**Exit codes** (`paladin-common/src/error.rs`)
 
 | Code | Meaning              | Example trigger                                                   |
 | ---: | -------------------- | ---------------------------------------------------------------- |
@@ -38,7 +38,7 @@ land. See `README.md` for how to run the suite and add a case.
 ## Done (for context)
 
 - [x] **roundtrip** (`cases/roundtrip_test.rb`) — fixture round-trip on defaults,
-  size sweep across the 64 KiB chunk boundary (incl. empty), default `.symcrypt` name.
+  size sweep across the 64 KiB chunk boundary (incl. empty), default `.paladin` name.
 - [x] **failures** (`cases/failures_test.rb`) — exit-code matrix: auth (3),
   format/version (4), refuse-to-overwrite / missing-input / usage / bad-options (2).
 
@@ -78,9 +78,9 @@ ASCII armor (`-a/--armor`; decrypt/verify/info auto-detect).
 
 - [x] Armored round-trip: `-a` encrypt → decrypt (auto-detect) → identical.
 - [x] Armored output is 7-bit printable ASCII (only LF + `0x20..0x7e`).
-- [x] ⚠ Banner lines are exactly `-----BEGIN SYMCRYPT MESSAGE-----` /
-  `-----END SYMCRYPT MESSAGE-----` (64-column base64 body, LF endings).
-- [x] Default armored output name is `<input>.symcrypt.asc` (DESIGN §6.5).
+- [x] ⚠ Banner lines are exactly `-----BEGIN PALADIN MESSAGE-----` /
+  `-----END PALADIN MESSAGE-----` (64-column base64 body, LF endings).
+- [x] Default armored output name is `<input>.paladin.asc` (DESIGN §6.5).
 - [x] `--info` on an armored file works (auto-detect).
 - [x] Armor to stdout (`-a -o -`) emits text; round-trips back through `-d -`.
 - [x] Armored multi-chunk file round-trips.
@@ -186,7 +186,7 @@ so future changes can't silently break old files. Goldens live in
 - [x] **Quiet:** `-q` produces no stderr chatter on success.
 - [x] **`--help` / `--version`** → exit 0 with expected text.
 
-## advanced / optional — `cases/advanced_test.rb` (opt-in: `SYMCRYPT_E2E_SLOW=1`) ✅
+## advanced / optional — `cases/advanced_test.rb` (opt-in: `PALADIN_E2E_SLOW=1`) ✅
 
 Skipped by default so the suite stays fast/deterministic.
 
@@ -203,7 +203,7 @@ Skipped by default so the suite stays fast/deterministic.
 - For a **downgrade** test, `set_byte` a header field to another *valid* value
   (e.g. cipher id `0x01`→`0x02`): the header still parses (so `--info` succeeds),
   but decrypt is exit **3** because the serialized header is chunk-0 AAD.
-- The magic is 8 bytes (`SYMCRYPT`); the version byte is at offset 8 and is
+- The magic is 8 bytes (`PALADIN`); the version byte is at offset 8 and is
   checked first — flipping it gives exit 4 even from `--info` (no password).
   The cipher id is offset 9, the kdf id offset 10, the flags byte offset 11.
 - Decrypt/verify/info are **header-driven**: passing `-c`/`--kdf`/`-a`/`--name`

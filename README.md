@@ -1,4 +1,4 @@
-# symcrypt
+# paladin
 
 A simple, safe symmetric file-encryption tool: three thin front-ends over one
 shared core. The default cipher is **AES-256-GCM** and the default KDF is
@@ -7,10 +7,10 @@ so they can be identified and decrypted with only the password (or keyfile) — 
 out-of-band parameters.
 
 > **Project status.** All three front-ends are implemented. The shared
-> libraries — `symcrypt-core` (all crypto, file format, streaming, helpers) and
-> `symcrypt-common` (terminal glue) — and the `symcrypt` command-line and
-> `symcrypt-tui` terminal front-ends are implemented and tested. The
-> `symcrypt-gtk` desktop app is implemented; it builds clean and its logic is
+> libraries — `paladin-core` (all crypto, file format, streaming, helpers) and
+> `paladin-common` (terminal glue) — and the `paladin` command-line and
+> `paladin-tui` terminal front-ends are implemented and tested. The
+> `paladin-gtk` desktop app is implemented; it builds clean and its logic is
 > unit-tested, but manual UI verification on a graphical session is still
 > pending. [`DESIGN.md`](docs/DESIGN.md) is the authoritative specification.
 
@@ -29,21 +29,21 @@ out-of-band parameters.
 - **AES Crypt read interop**: `-d`, `--verify`, and `-i` also decrypt, verify,
   and inspect foreign [AES Crypt](https://www.aescrypt.com/) (`.aes`) files
   (Stream Format 1 and 2), detected automatically. Encryption always writes
-  symcrypt's own format; re-encrypt a decrypted `.aes` file to migrate it.
+  paladin's own format; re-encrypt a decrypted `.aes` file to migrate it.
 
 ## Architecture
 
-A Cargo workspace of five crates. **`symcrypt-core` does all the work**; each
+A Cargo workspace of five crates. **`paladin-core` does all the work**; each
 front-end is a thin view that gathers input, hands it to the core, and renders
 the result.
 
 | Crate             | Kind               | Responsibility                                                                                 |
 | ----------------- | ------------------ | ---------------------------------------------------------------------------------------------- |
-| `symcrypt-core`   | lib                | All crypto, KDF, file format/header, STREAM chunking, ASCII armor, and pure helpers.            |
-| `symcrypt-common` | lib                | Terminal glue shared by the CLI + TUI: path-or-stdin I/O, clobber check, secure remove, password resolution, exit-code mapping. |
-| `symcrypt-cli`    | bin `symcrypt`     | clap argument parsing; password resolution; calls the core.                                     |
-| `symcrypt-tui`    | bin `symcrypt-tui` | ratatui + crossterm interactive form. Reuses `symcrypt-common`.                                 |
-| `symcrypt-gtk`    | bin `symcrypt-gtk` | relm4 (gtk4-rs) + libadwaita desktop app.                                                       |
+| `paladin-core`   | lib                | All crypto, KDF, file format/header, STREAM chunking, ASCII armor, and pure helpers.            |
+| `paladin-common` | lib                | Terminal glue shared by the CLI + TUI: path-or-stdin I/O, clobber check, secure remove, password resolution, exit-code mapping. |
+| `paladin-cli`    | bin `paladin`     | clap argument parsing; password resolution; calls the core.                                     |
+| `paladin-tui`    | bin `paladin-tui` | ratatui + crossterm interactive form. Reuses `paladin-common`.                                 |
+| `paladin-gtk`    | bin `paladin-gtk` | relm4 (gtk4-rs) + libadwaita desktop app.                                                       |
 
 The core never reads argv, never prompts, never touches the filesystem on its
 own, never decides whether to overwrite, and never exits the process. It takes
@@ -51,13 +51,13 @@ generic `Read`/`Write` and reports progress through a callback.
 
 ## Building from source
 
-`symcrypt` builds with a standard Rust toolchain and Cargo. The `symcrypt` CLI
-and `symcrypt-tui` terminal app are pure Rust and need no system libraries — only
-the `symcrypt-gtk` desktop app needs the GTK4 + libadwaita development packages.
+`paladin` builds with a standard Rust toolchain and Cargo. The `paladin` CLI
+and `paladin-tui` terminal app are pure Rust and need no system libraries — only
+the `paladin-gtk` desktop app needs the GTK4 + libadwaita development packages.
 
 ### 1. Install the Rust toolchain
 
-symcrypt targets a **minimum supported Rust version (MSRV) of 1.94** (edition
+paladin targets a **minimum supported Rust version (MSRV) of 1.94** (edition
 2021); no `rust-toolchain.toml` is pinned, so current stable works. The easiest
 way to get it is [`rustup`](https://rustup.rs), the official Rust toolchain
 installer and version manager:
@@ -99,7 +99,7 @@ chose the minimal profile at install time, add the lint and format tools with
 
 ### 2. Install system dependencies (GTK app only)
 
-Skip this step unless you are building `symcrypt-gtk`. The desktop app links
+Skip this step unless you are building `paladin-gtk`. The desktop app links
 against **GTK4** and **libadwaita**, so it needs their development packages plus
 a C compiler and `pkg-config` to locate them:
 
@@ -114,8 +114,8 @@ for the C compiler and linker.
 ### 3. Get the source
 
 ```sh
-git clone https://github.com/FreedomBen/symcrypt.git
-cd symcrypt
+git clone https://github.com/FreedomBen/paladin.git
+cd paladin
 ```
 
 ### 4. Build
@@ -125,13 +125,13 @@ cargo build                   # debug build of the whole workspace
 cargo build --release         # optimized build → target/release/
 ```
 
-Build a single front-end with `-p`. Note the CLI package is **`symcrypt-cli`**
-but its binary is named **`symcrypt`**:
+Build a single front-end with `-p`. Note the CLI package is **`paladin-cli`**
+but its binary is named **`paladin`**:
 
 ```sh
-cargo build -p symcrypt-cli   # CLI only      (binary: symcrypt)
-cargo build -p symcrypt-tui   # terminal app only
-cargo build -p symcrypt-gtk   # desktop app only (needs the deps from step 2)
+cargo build -p paladin-cli   # CLI only      (binary: paladin)
+cargo build -p paladin-tui   # terminal app only
+cargo build -p paladin-gtk   # desktop app only (needs the deps from step 2)
 ```
 
 ### 5. Run the tests
@@ -140,8 +140,8 @@ Confirm the build with the workspace test suite:
 
 ```sh
 cargo test                               # the whole workspace
-cargo test -p symcrypt-core              # one crate
-cargo test -p symcrypt-core round_trip   # a single test by name (substring match)
+cargo test -p paladin-core              # one crate
+cargo test -p paladin-core round_trip   # a single test by name (substring match)
 ```
 
 ### 6. Build, test, and lint commands
@@ -151,8 +151,8 @@ cargo test -p symcrypt-core round_trip   # a single test by name (substring matc
 | Build everything (debug)  | `cargo build`                                 |
 | Build release             | `cargo build --release`                       |
 | Test the whole workspace  | `cargo test`                                  |
-| Test one crate            | `cargo test -p symcrypt-core`                 |
-| Run a single test by name | `cargo test -p symcrypt-core round_trip`      |
+| Test one crate            | `cargo test -p paladin-core`                 |
+| Run a single test by name | `cargo test -p paladin-core round_trip`      |
 | Lint                      | `cargo clippy --all-targets --all-features`   |
 | Format                    | `cargo fmt` (check only: `cargo fmt --check`) |
 
@@ -167,9 +167,9 @@ Install any front-end into Cargo's binary directory (`~/.cargo/bin`, which
 `rustup` puts on your `PATH`):
 
 ```sh
-cargo install --path crates/symcrypt-cli    # the `symcrypt` CLI
-cargo install --path crates/symcrypt-tui    # the terminal app
-cargo install --path crates/symcrypt-gtk    # the desktop app (needs step 2)
+cargo install --path crates/paladin-cli    # the `paladin` CLI
+cargo install --path crates/paladin-tui    # the terminal app
+cargo install --path crates/paladin-gtk    # the desktop app (needs step 2)
 ```
 
 Or use the Makefile to install a binary **and** its packaged extras — a man page
@@ -178,9 +178,9 @@ under a prefix (default `/usr/local`; override with `PREFIX=`, stage with
 `DESTDIR=`):
 
 ```sh
-make install                       # symcrypt CLI + man page
-make install-tui                   # symcrypt-tui + man page
-make install-gtk                   # symcrypt-gtk + .desktop + icon + metainfo
+make install                       # paladin CLI + man page
+make install-tui                   # paladin-tui + man page
+make install-gtk                   # paladin-gtk + .desktop + icon + metainfo
 make install PREFIX="$HOME/.local"
 ```
 
@@ -196,12 +196,12 @@ the CLI on a headless box never pulls in the GTK stack:
 
 | Package        | Installs                                               | Runtime dependencies |
 | -------------- | ----------------------------------------------------- | -------------------- |
-| `symcrypt`     | `symcrypt` CLI and its man page                       | libc                 |
-| `symcrypt-tui` | `symcrypt-tui` and its man page                       | libc                 |
-| `symcrypt-gtk` | `symcrypt-gtk`, `.desktop` entry, icon, AppStream data | GTK 4, libadwaita    |
+| `paladin`     | `paladin` CLI and its man page                       | libc                 |
+| `paladin-tui` | `paladin-tui` and its man page                       | libc                 |
+| `paladin-gtk` | `paladin-gtk`, `.desktop` entry, icon, AppStream data | GTK 4, libadwaita    |
 
 First install nfpm (a single Go binary — it is **not** a build dependency of
-symcrypt itself):
+paladin itself):
 
 ```sh
 go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
@@ -219,49 +219,49 @@ make package-rpm    # only the .rpm packages
 `VERSION` is read from the workspace `Cargo.toml`. Override the target
 architecture with `ARCH=` (nfpm names — `amd64`, `arm64`) and the output
 directory with `DISTDIR=`; the nfpm configs live in `packaging/`. Building the
-`symcrypt-gtk` package needs the GTK build dependencies from step 2.
+`paladin-gtk` package needs the GTK build dependencies from step 2.
 
 ## Command-line usage
 
-Install the `symcrypt` binary with Cargo:
+Install the `paladin` binary with Cargo:
 
 ```sh
-cargo install --path crates/symcrypt-cli
+cargo install --path crates/paladin-cli
 ```
 
 Or install the binary **and** its man page under a prefix (default
 `/usr/local`, override with `PREFIX=`, stage with `DESTDIR=`):
 
 ```sh
-make install                      # → /usr/local/bin/symcrypt + man page
+make install                      # → /usr/local/bin/paladin + man page
 make install PREFIX="$HOME/.local"
 make uninstall                    # remove both again
 ```
 
-`symcrypt` takes exactly one mode (`-e`/`-d`/`-i`/`--verify`) and one `<FILE>`
+`paladin` takes exactly one mode (`-e`/`-d`/`-i`/`--verify`) and one `<FILE>`
 (`-` means stdin). With no password source it prompts interactively (no echo);
 non-interactively, supply `-p`, `--password-file`, `--password-env`, and/or a
-keyfile (`-k`). See `symcrypt --help` for every option and
+keyfile (`-k`). See `paladin --help` for every option and
 [`DESIGN.md`](docs/DESIGN.md) §6 for the full specification.
 
 ```sh
-symcrypt -e report.pdf                      # → report.pdf.symcrypt (prompts for a password)
-symcrypt -e report.pdf -o - --armor > out   # armored, written to stdout
-symcrypt -d report.pdf.symcrypt             # → report.pdf (or the stored/derived name)
-symcrypt -i report.pdf.symcrypt             # print unauthenticated header metadata
-symcrypt --verify report.pdf.symcrypt       # check integrity + password, writing nothing
-printf 'secret' | PW=passphrase symcrypt -e - -o s.symcrypt --password-env PW
-symcrypt -e vault.tar -k usb.key --no-password   # keyfile-only
-symcrypt -e big.iso -c chacha20-poly1305 --remove
-symcrypt -d secret.txt.aes                       # decrypt a foreign AES Crypt file → secret.txt
+paladin -e report.pdf                      # → report.pdf.paladin (prompts for a password)
+paladin -e report.pdf -o - --armor > out   # armored, written to stdout
+paladin -d report.pdf.paladin             # → report.pdf (or the stored/derived name)
+paladin -i report.pdf.paladin             # print unauthenticated header metadata
+paladin --verify report.pdf.paladin       # check integrity + password, writing nothing
+printf 'secret' | PW=passphrase paladin -e - -o s.paladin --password-env PW
+paladin -e vault.tar -k usb.key --no-password   # keyfile-only
+paladin -e big.iso -c chacha20-poly1305 --remove
+paladin -d secret.txt.aes                       # decrypt a foreign AES Crypt file → secret.txt
 ```
 
 `-d`, `--verify`, and `-i` auto-detect foreign AES Crypt (`.aes`) files (Stream
 Format 1 and 2). Their header is unauthenticated, so `-i` reports
-`authenticated: false`; symcrypt never *writes* AES Crypt, so to migrate a file,
+`authenticated: false`; paladin never *writes* AES Crypt, so to migrate a file,
 decrypt it and re-encrypt with `-e`. An AES Crypt key file may be passed with
 `--password-file` only when it is valid UTF-8 text (`-k` and `--no-password`
-apply to symcrypt files only).
+apply to paladin files only).
 
 Existing output files are refused unless `-f/--force` is given; on Unix the
 output is created with mode `0600`. Exit codes: `0` success, `1` I/O or general
@@ -270,30 +270,30 @@ format, `130` canceled.
 
 ## Terminal usage
 
-`symcrypt-tui` is a full-screen, keyboard-driven terminal front-end over the same
+`paladin-tui` is a full-screen, keyboard-driven terminal front-end over the same
 core as the CLI, so the file format, cryptography, and defaults are identical. It
 presents one form with four mode tabs — Encrypt, Decrypt, Info, and Verify — and
 runs each operation off the UI thread with a live progress gauge.
 
-Install the `symcrypt-tui` binary with Cargo, or install the binary **and** its
+Install the `paladin-tui` binary with Cargo, or install the binary **and** its
 man page under a prefix with the Makefile:
 
 ```sh
-cargo install --path crates/symcrypt-tui
-make install-tui                       # → /usr/local/bin/symcrypt-tui + man page
+cargo install --path crates/paladin-tui
+make install-tui                       # → /usr/local/bin/paladin-tui + man page
 make install-tui PREFIX="$HOME/.local"
 ```
 
 Launch it (optionally prefilling the input-path field with a file):
 
 ```sh
-symcrypt-tui                 # start with an empty form
-symcrypt-tui report.pdf      # prefill the input path
+paladin-tui                 # start with an empty form
+paladin-tui report.pdf      # prefill the input path
 ```
 
 Switch modes with the `←`/`→` keys while the tabs are focused; each mode shows
 only the fields it needs (Encrypt adds a confirm field; Info reads no password).
-The output path is prefilled automatically — `input.symcrypt` (or `.symcrypt.asc`
+The output path is prefilled automatically — `input.paladin` (or `.paladin.asc`
 with armor) on encrypt, and the stored/derived name on decrypt — but a manual
 edit is never overwritten. An **Advanced** pane (collapsible) holds the
 Encrypt-only cipher and KDF selectors with the selected KDF's cost knobs, the
@@ -323,7 +323,7 @@ file".
 
 ## Desktop (GTK) usage
 
-`symcrypt-gtk` is a libadwaita desktop front-end (relm4 + gtk4-rs) over the same
+`paladin-gtk` is a libadwaita desktop front-end (relm4 + gtk4-rs) over the same
 core as the CLI and TUI, so the file format, cryptography, and defaults are
 identical. It is implemented; it builds clean and its pure logic is unit-tested,
 but manual UI verification on a graphical session is still pending.
@@ -336,7 +336,7 @@ and Verify — sharing one form whose rows show and hide per mode. It offers:
 
 - input and output file pickers via `gtk::FileDialog`, plus drag-and-drop of an
   input file onto the window;
-- output prefill — `input.symcrypt` (or `.symcrypt.asc` with armor) on encrypt,
+- output prefill — `input.paladin` (or `.paladin.asc` with armor) on encrypt,
   and the stored/derived name on decrypt — that never clobbers a manual edit;
 - password and confirm (Encrypt) entries, a keyfile-only toggle, and a keyfile
   chooser;
@@ -354,10 +354,10 @@ Run it from the workspace, or install the binary together with its `.desktop`
 entry, icon, and AppStream metainfo:
 
 ```sh
-cargo run -p symcrypt-gtk                 # run from the source tree
+cargo run -p paladin-gtk                 # run from the source tree
 make run-gtk                              # same, via the Makefile
 
-cargo install --path crates/symcrypt-gtk  # binary only
+cargo install --path crates/paladin-gtk  # binary only
 make install-gtk                          # binary + .desktop + icon + metainfo
 make install-gtk PREFIX="$HOME/.local"
 make uninstall-gtk                        # remove them again
@@ -375,13 +375,13 @@ provided) is a possible future distribution path.
 
 ## Library usage
 
-`symcrypt-core` exposes four operations — `encrypt`, `decrypt`, `inspect`
+`paladin-core` exposes four operations — `encrypt`, `decrypt`, `inspect`
 (unauthenticated header metadata, no secret needed), and `verify`
 (decrypt-and-discard) — each over generic `Read`/`Write`:
 
 ```rust
 use std::ops::ControlFlow;
-use symcrypt_core::{decrypt, encrypt, EncryptOptions, Progress, Secret};
+use paladin_core::{decrypt, encrypt, EncryptOptions, Progress, Secret};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Password and/or keyfile material, zeroized on drop.
@@ -420,7 +420,7 @@ associated data) followed by a **STREAM**-chunked body; all integers are
 big-endian. The entire serialized header is the associated data for chunk 0, so
 the cipher, KDF, parameters, and optional filename cannot be tampered with
 (downgrade-resistant). With `--armor`, the binary container is base64-wrapped in
-PEM-style `-----BEGIN/END SYMCRYPT MESSAGE-----` markers.
+PEM-style `-----BEGIN/END PALADIN MESSAGE-----` markers.
 
 - **Ciphers:** AES-256-GCM (default) or ChaCha20-Poly1305.
 - **KDFs:** Argon2id (default), scrypt, or PBKDF2-HMAC-SHA256.

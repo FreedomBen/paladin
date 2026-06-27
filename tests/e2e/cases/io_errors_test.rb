@@ -17,7 +17,7 @@ class IoErrorsTest < E2ETest
   # Encrypting into a non-existent output directory is a general I/O error: the
   # sibling temp file can't be created. (DESIGN §6.6 → exit 1.)
   def test_output_into_missing_directory_is_io_error
-    res = symcrypt("-e", Symcrypt::LOREM, "-o", tmp("no_such_dir/out.symcrypt"),
+    res = paladin("-e", Paladin::LOREM, "-o", tmp("no_such_dir/out.paladin"),
                    *FAST_KDF, "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
     assert_status res, 1
   end
@@ -28,7 +28,7 @@ class IoErrorsTest < E2ETest
     src = write_input("secret.txt", "data")
     File.chmod(0o000, src)
     begin
-      res = symcrypt("-e", src, "-o", tmp("o.symcrypt"), *FAST_KDF,
+      res = paladin("-e", src, "-o", tmp("o.paladin"), *FAST_KDF,
                      "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
       assert_status res, 1
     ensure
@@ -41,7 +41,7 @@ class IoErrorsTest < E2ETest
   def test_directory_input_is_usage_error
     subdir = tmp("a_directory")
     FileUtils.mkdir_p(subdir)
-    res = symcrypt("-e", subdir, "-o", tmp("o.symcrypt"), *FAST_KDF,
+    res = paladin("-e", subdir, "-o", tmp("o.paladin"), *FAST_KDF,
                    "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
     assert_failure res, 2, "not a regular file"
   end
@@ -54,7 +54,7 @@ class IoErrorsTest < E2ETest
     FileUtils.mkdir_p(ro)
     File.chmod(0o555, ro)
     begin
-      res = symcrypt("-e", Symcrypt::LOREM, "-o", File.join(ro, "out.symcrypt"),
+      res = paladin("-e", Paladin::LOREM, "-o", File.join(ro, "out.paladin"),
                      *FAST_KDF, "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
       assert_status res, 1
     ensure

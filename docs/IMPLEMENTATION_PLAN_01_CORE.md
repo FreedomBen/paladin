@@ -1,7 +1,7 @@
 # Implementation Plan 01 — Core & Common
 
-> Scope: the Cargo workspace scaffold, the `symcrypt-core` library (all crypto,
-> file format, streaming, armor, pure helpers), and the `symcrypt-common`
+> Scope: the Cargo workspace scaffold, the `paladin-core` library (all crypto,
+> file format, streaming, armor, pure helpers), and the `paladin-common`
 > terminal glue shared by the CLI and TUI. This is the foundation the three
 > front-end plans (`02`–`04`) all depend on, so it is built first.
 
@@ -14,13 +14,13 @@ plan, then the code.
 > ("the shared libraries … are implemented and tested") and the git history
 > (`Add ASCII armor and the public encrypt/decrypt/inspect/verify API`, `Add
 > known-answer vectors and public-API integration tests`, `Add default
-> output-path helpers`, `Implement symcrypt-common terminal glue`), the
-> workspace, `symcrypt-core`, and `symcrypt-common` are already built. The
+> output-path helpers`, `Implement paladin-common terminal glue`), the
+> workspace, `paladin-core`, and `paladin-common` are already built. The
 > checklists below are ticked to reflect that committed state — they now serve as
 > an as-built spec and a re-verification checklist. The API sketches in each
 > phase have been reconciled to the shipped names and signatures; where the
 > as-built diverged from the original sketch (method vs. free function,
-> `to_words`/`from_words`, `auto_dearmor`, the `symcrypt-common` module split,
+> `to_words`/`from_words`, `auto_dearmor`, the `paladin-common` module split,
 > etc.) an **As built** note flags it. Re-run `cargo test` +
 > `cargo clippy --all-targets --all-features` to confirm green.
 
@@ -40,7 +40,7 @@ plan, then the code.
 
 ## Guiding constraints (the core's hard boundary)
 
-These come straight from §2.2 and must hold for every line in `symcrypt-core`:
+These come straight from §2.2 and must hold for every line in `paladin-core`:
 
 - Never reads argv, never prompts, never touches the filesystem, never decides
   whether to overwrite, never exits the process.
@@ -51,16 +51,16 @@ These come straight from §2.2 and must hold for every line in `symcrypt-core`:
 - All multi-byte integers **big-endian** on the wire (§5.1).
 - Unauthenticated header lengths/KDF costs are range-checked **before** any
   allocation or key derivation (§5.4, §11).
-- `SymError` → exit-code classification lives in `symcrypt-common`, **not** in
+- `SymError` → exit-code classification lives in `paladin-common`, **not** in
   the core and **not** in the front-ends (§6.6).
 
 ## Crates to scaffold & dependency direction
 
-Workspace members: `symcrypt-core`, `symcrypt-common`, `symcrypt-cli`,
-`symcrypt-tui`, `symcrypt-gtk`. Direction: `common`/`cli`/`tui`/`gtk` → `core`;
+Workspace members: `paladin-core`, `paladin-common`, `paladin-cli`,
+`paladin-tui`, `paladin-gtk`. Direction: `common`/`cli`/`tui`/`gtk` → `core`;
 `cli`/`tui` → `common`; `gtk` deliberately skips `common` (§2).
 
-This plan implements **`symcrypt-core`** and **`symcrypt-common`** fully. The
+This plan implements **`paladin-core`** and **`paladin-common`** fully. The
 three front-end crates are scaffolded as compiling placeholders only (a `main`
 that prints "not implemented") so the workspace stays green; their real work and
 dependencies arrive in plans `02`–`04`. Do **not** add front-end deps
@@ -78,9 +78,9 @@ dependencies arrive in plans `02`–`04`. Do **not** add front-end deps
   five crates under `crates/`, and a shared `[workspace.package]` (edition
   `2021`, rust-version `1.94`, license, repository) + `[workspace.dependencies]`
   table so versions are pinned once.
-- Create the directory tree from §2.1 (`crates/symcrypt-core/src/{lib,error,
+- Create the directory tree from §2.1 (`crates/paladin-core/src/{lib,error,
   secret,header,kdf,cipher,stream,armor,paths}.rs` as empty modules wired into
-  `lib.rs`; `crates/symcrypt-common/src/lib.rs`; placeholder `main.rs` for the
+  `lib.rs`; `crates/paladin-common/src/lib.rs`; placeholder `main.rs` for the
   three front-ends).
 - Add core deps via `cargo add` (pins land in `Cargo.lock`, §9): `aes-gcm`,
   `chacha20poly1305`, `argon2`, `scrypt`, `pbkdf2`, `sha2`, `getrandom`,
@@ -89,7 +89,7 @@ dependencies arrive in plans `02`–`04`. Do **not** add front-end deps
   comes straight from `getrandom::fill`, so the `rand`/`rand_core` wrappers are
   not added as direct deps — `rand` is absent from the tree, `rand_core` is only
   pulled transitively by the KDF crates.)
-- `symcrypt-common` deps: path `symcrypt-core`, `thiserror`, `tempfile`, and
+- `paladin-common` deps: path `paladin-core`, `thiserror`, `tempfile`, and
   `zeroize`. **As built:** `tempfile` is a normal dependency (the `open_output`
   sibling temp file), not a dev-dep, and `zeroize` is added so the password and
   keyfile readers can return `Zeroizing<Vec<u8>>`.
@@ -98,9 +98,9 @@ dependencies arrive in plans `02`–`04`. Do **not** add front-end deps
 **Checklist**
 
 - [x] Root workspace manifest with resolver, members, shared package + deps.
-- [x] `symcrypt-core` crate with all module files stubbed and re-exported.
-- [x] `symcrypt-common` crate stub.
-- [x] `symcrypt-cli` (bin `symcrypt`), `symcrypt-tui`, `symcrypt-gtk` placeholders.
+- [x] `paladin-core` crate with all module files stubbed and re-exported.
+- [x] `paladin-common` crate stub.
+- [x] `paladin-cli` (bin `paladin`), `paladin-tui`, `paladin-gtk` placeholders.
 - [x] Core + common dependencies added and pinned.
 - [x] `cargo build`, `cargo fmt --check`, `cargo clippy`, `cargo test` all clean.
 
@@ -118,7 +118,7 @@ later phases use it. Variants align 1:1 with the §6.6 exit-code mapping.
 #[non_exhaustive]               // future variants must not break front-end matches
 pub enum SymError {
     Auth,                       // wrong password OR corrupt/tampered (indistinguishable) → 3
-    BadMagic,                   // not a symcrypt file                                    → 4
+    BadMagic,                   // not a paladin file                                    → 4
     UnsupportedVersion(u8),     //                                                        → 4
     UnknownCipher(u8),          //                                                        → 4
     UnknownKdf(u8),             //                                                        → 4
@@ -133,7 +133,7 @@ pub type Result<T> = std::result::Result<T, SymError>;
 ```
 
 **As built:** `ReservedFlags(u8)` carries the offending flag byte, and `SymError`
-is `#[non_exhaustive]` — so the `exit_code` classifier in `symcrypt-common` keeps
+is `#[non_exhaustive]` — so the `exit_code` classifier in `paladin-common` keeps
 a catch-all `_ => EXIT_GENERAL` arm for any future variant.
 
 **Tests first**
@@ -171,7 +171,7 @@ impl Secret {
 ```
 
 Encoding (exact, §4.2):
-`b"symcrypt secret v1\0" || u64be(pw_len) || pw || u64be(kf_len) || kf`.
+`b"paladin secret v1\0" || u64be(pw_len) || pw || u64be(kf_len) || kf`.
 
 **Tests first**
 
@@ -354,7 +354,7 @@ neither `.` nor `..` (interior dots allowed).
 Parse order & validation (reject **before** allocating large buffers or
 deriving keys, §5.7 / §11):
 
-1. `magic == "SYMCRYPT"` else `BadMagic`.
+1. `magic == "PALADIN"` else `BadMagic`.
 2. `version == 0x01` else `UnsupportedVersion`.
 3. `cipher_id` known else `UnknownCipher`; `kdf_id` known else `UnknownKdf`.
 4. `flags` bits 2–7 must be 0 else `ReservedFlags`; decode bit0 (name present),
@@ -492,8 +492,8 @@ strip on decrypt/verify/info.
 **API sketch**
 
 ```rust
-pub(crate) const BEGIN_MARKER: &str = "-----BEGIN SYMCRYPT MESSAGE-----";
-pub(crate) const END_MARKER:   &str = "-----END SYMCRYPT MESSAGE-----";
+pub(crate) const BEGIN_MARKER: &str = "-----BEGIN PALADIN MESSAGE-----";
+pub(crate) const END_MARKER:   &str = "-----END PALADIN MESSAGE-----";
 pub(crate) const LINE_COLUMNS: usize = 64; // base64 columns per line (48 input bytes)
 
 /// Writer adapter: base64 (RFC 4648 +/=), LF, lines wrapped at exactly 64 cols.
@@ -557,21 +557,21 @@ pub fn default_encrypt_output(input: &Path, armor: bool) -> PathBuf;
 pub fn default_decrypt_output(input: &Path, header: &Header) -> PathBuf;
 ```
 
-- Encrypt: append `.symcrypt` (or `.symcrypt.asc` when `armor`).
+- Encrypt: append `.paladin` (or `.paladin.asc` when `armor`).
 - Decrypt: if `header.name_status == Present`, place that basename beside the
-  input; else strip `.symcrypt.asc`, then `.symcrypt`, then `.asc`; else append
-  `.dec`. Empty-basename fallback: input named exactly `.symcrypt` / `.asc` /
-  `.symcrypt.asc` → append `.dec` to the original (e.g. `.symcrypt` →
-  `.symcrypt.dec`).
+  input; else strip `.paladin.asc`, then `.paladin`, then `.asc`; else append
+  `.dec`. Empty-basename fallback: input named exactly `.paladin` / `.asc` /
+  `.paladin.asc` → append `.dec` to the original (e.g. `.paladin` →
+  `.paladin.dec`).
 
 **Tests first**
 
-- `report.pdf` → `report.pdf.symcrypt`; armored → `report.pdf.symcrypt.asc`.
+- `report.pdf` → `report.pdf.paladin`; armored → `report.pdf.paladin.asc`.
 - Decrypt with stored `Present` name → that name beside the input dir.
-- Strip each recognized extension: `x.symcrypt.asc`→`x`, `x.symcrypt`→`x`,
+- Strip each recognized extension: `x.paladin.asc`→`x`, `x.paladin`→`x`,
   `x.asc`→`x`; unknown → `x.dec`.
-- Empty-basename fallback: `.symcrypt`→`.symcrypt.dec`, `.asc`→`.asc.dec`,
-  `.symcrypt.asc`→`.symcrypt.asc.dec`.
+- Empty-basename fallback: `.paladin`→`.paladin.dec`, `.asc`→`.asc.dec`,
+  `.paladin.asc`→`.paladin.asc.dec`.
 - `IgnoredUnsafe`/`Absent` names fall through to extension stripping.
 
 **Checklist**
@@ -687,7 +687,7 @@ uses fresh OS randomness.
 fast; cost-correctness is already covered in Phase 4. **As built, this coverage
 lives inline in the `src/*.rs` `#[cfg(test)]` modules** (each module tests its
 own format/stream/armor internals), with a single external
-`crates/symcrypt-core/tests/integration.rs` exercising the composed public API
+`crates/paladin-core/tests/integration.rs` exercising the composed public API
 (`encrypt`/`decrypt`/`inspect`/`verify` + path helpers) the front-ends use.
 
 **Round-trip** (`stream.rs::round_trip_across_sizes_and_ciphers`) over sizes
@@ -726,10 +726,10 @@ vectors (no `tests/vectors/` directory):
 
 ---
 
-## Phase 11 — `symcrypt-common` (terminal glue)
+## Phase 11 — `paladin-common` (terminal glue)
 
 **Goal:** the shared CLI+TUI glue (§2.2, §6.4–§6.6). Depends only on
-`symcrypt-core` + std + `thiserror` + `tempfile`. No crypto, no format logic.
+`paladin-core` + std + `thiserror` + `tempfile`. No crypto, no format logic.
 **As built**, the crate is split into `lib.rs` + `error.rs` + `fs.rs` +
 `password.rs` (the §2.1 sketch shows a single `lib.rs`).
 
@@ -812,7 +812,7 @@ Rules to enforce (from §6.4/§6.5):
 - [x] Password-file / keyfile readers with size caps, `-`/non-regular rejection.
 - [x] Clobber, same-file (symlink/hardlink), and temp-file `0600` finalization.
 - [x] `best_effort_remove` warn-but-success behavior.
-- [x] All `symcrypt-common` unit tests green.
+- [x] All `paladin-common` unit tests green.
 
 ---
 
@@ -820,11 +820,11 @@ Rules to enforce (from §6.4/§6.5):
 
 - [x] `cargo fmt --check` clean across the workspace.
 - [x] `cargo clippy --all-targets --all-features` — **zero** warnings.
-- [x] `cargo test` green for `symcrypt-core` and `symcrypt-common`.
+- [x] `cargo test` green for `paladin-core` and `paladin-common`.
 - [x] `cargo build --release` succeeds (front-end placeholders included).
 - [x] `README.md` "Development commands" still match reality; update if drifted.
 - [x] Confirm the core honors its boundary: a quick grep shows no argv/stdin/
-      `std::process::exit`/filesystem access inside `symcrypt-core`.
+      `std::process::exit`/filesystem access inside `paladin-core`.
 
 ---
 
@@ -845,14 +845,14 @@ Rules to enforce (from §6.4/§6.5):
 | Round-trip across sizes × ciphers × KDFs                   | 10    |
 | Negative/tamper (flip, downgrade, truncate, append, swap…) | 10    |
 | Known-answer vectors (committed, deterministic generation) | 9, 10 |
-| `symcrypt-common` glue (I/O, clobber, remove, mapping)     | 11    |
+| `paladin-common` glue (I/O, clobber, remove, mapping)     | 11    |
 
 ## Definition of done
 
 - All Phase 0–12 checklists ticked.
-- `symcrypt-core` exposes exactly the §2.3 surface and never crosses its §2.2
+- `paladin-core` exposes exactly the §2.3 surface and never crosses its §2.2
   boundary.
-- `symcrypt-common` is the sole place `SymError` is mapped to exit codes.
+- `paladin-common` is the sole place `SymError` is mapped to exit codes.
 - Every §10 test exists and passes; `fmt`/`clippy` clean.
 - The CLI plan (`IMPLEMENTATION_PLAN_02_CLI.md`) can build entirely on the public
   core API + common glue with no further core changes.

@@ -22,11 +22,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-The Cargo workspace is scaffolded. The shared libraries — **`symcrypt-core`** (all
-crypto, file format, streaming, armor, pure helpers) and **`symcrypt-common`**
-(terminal glue) — and all three front-ends are implemented: the **`symcrypt`**
-command-line and **`symcrypt-tui`** terminal front-ends are implemented and
-tested, and the **`symcrypt-gtk`** desktop app is implemented too — it builds
+The Cargo workspace is scaffolded. The shared libraries — **`paladin-core`** (all
+crypto, file format, streaming, armor, pure helpers) and **`paladin-common`**
+(terminal glue) — and all three front-ends are implemented: the **`paladin`**
+command-line and **`paladin-tui`** terminal front-ends are implemented and
+tested, and the **`paladin-gtk`** desktop app is implemented too — it builds
 clean and its logic is unit-tested, though manual UI verification on a graphical
 session is still pending (see `docs/IMPLEMENTATION_PLAN_04_GTK.md`).
 Treat `docs/DESIGN.md` as the source of truth for how everything should behave.
@@ -39,7 +39,7 @@ Treat `docs/DESIGN.md` as the source of truth for how everything should behave.
   three front-ends all depend on it.
 - `TODO.md` is git-ignored and maintained by humans — do not rely on it.
 
-## What symcrypt is
+## What paladin is
 
 A simple, safe symmetric file-encryption tool: three thin front-ends over one
 shared core. Default cipher AES-256-GCM, default KDF Argon2id. Encrypted files
@@ -48,9 +48,9 @@ only the password/keyfile — no out-of-band parameters.
 
 ## Development commands
 
-This is a standard multi-crate Cargo workspace and it builds today: `symcrypt-core`,
-`symcrypt-common`, the `symcrypt` CLI, and the `symcrypt-tui` terminal app are
-implemented and tested, and the `symcrypt-gtk` desktop app is implemented as well
+This is a standard multi-crate Cargo workspace and it builds today: `paladin-core`,
+`paladin-common`, the `paladin` CLI, and the `paladin-tui` terminal app are
+implemented and tested, and the `paladin-gtk` desktop app is implemented as well
 — it builds clean and its logic is unit-tested, though manual UI verification on a
 graphical session is still pending (see `docs/IMPLEMENTATION_PLAN_04_GTK.md`).
 
@@ -58,30 +58,30 @@ graphical session is still pending (see `docs/IMPLEMENTATION_PLAN_04_GTK.md`).
 | -------------------------- | ------------------------------------------------------------------------------------ |
 | Build everything (debug)   | `cargo build`                                                                        |
 | Build release              | `cargo build --release`                                                              |
-| Run the CLI                | `cargo run -p symcrypt-cli -- -e file.txt` (package `symcrypt-cli`, binary `symcrypt`) |
-| Run the TUI                | `cargo run -p symcrypt-tui`                                                           |
-| Run the GTK app            | `cargo run -p symcrypt-gtk` (needs GTK4 + libadwaita dev libraries installed)        |
+| Run the CLI                | `cargo run -p paladin-cli -- -e file.txt` (package `paladin-cli`, binary `paladin`) |
+| Run the TUI                | `cargo run -p paladin-tui`                                                           |
+| Run the GTK app            | `cargo run -p paladin-gtk` (needs GTK4 + libadwaita dev libraries installed)        |
 | Test the whole workspace   | `cargo test`                                                                          |
-| Test one crate             | `cargo test -p symcrypt-core`                                                         |
-| Run a single test by name  | `cargo test -p symcrypt-core round_trip` (substring; add `-- --exact` / `-- --nocapture`) |
+| Test one crate             | `cargo test -p paladin-core`                                                         |
+| Run a single test by name  | `cargo test -p paladin-core round_trip` (substring; add `-- --exact` / `-- --nocapture`) |
 | Lint                       | `cargo clippy --all-targets --all-features`                                          |
 | Format                     | `cargo fmt` (check-only: `cargo fmt --check`)                                         |
 
-Gotcha: the CLI lives in package **`symcrypt-cli`** but produces a binary named
-**`symcrypt`** — use `-p symcrypt-cli` (or `--bin symcrypt`) to run it.
+Gotcha: the CLI lives in package **`paladin-cli`** but produces a binary named
+**`paladin`** — use `-p paladin-cli` (or `--bin paladin`) to run it.
 
 ## Architecture
 
 ### One core, thin front-ends (the central rule)
 
-A Cargo workspace of five crates. **`symcrypt-core` does all the work** — every
+A Cargo workspace of five crates. **`paladin-core` does all the work** — every
 front-end is just a view that gathers input, hands it to the core, and renders
 the result. This keeps the security-critical code small, testable, and identical
 across front-ends.
 
 The core's hard boundary — when implementing, never cross it:
 
-> `symcrypt-core` never reads argv, never prompts, never touches the filesystem,
+> `paladin-core` never reads argv, never prompts, never touches the filesystem,
 > never decides whether to overwrite, and never exits the process. It takes
 > generic `Read`/`Write` and reports progress through an `on_progress` callback
 > that returns `ControlFlow::Break` to cancel.
@@ -94,11 +94,11 @@ errors, exit codes — lives in the front-ends.
 
 | Crate            | Kind             | Responsibility                                                                                                                                |
 | ---------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `symcrypt-core`  | lib              | All crypto, KDF, file format/header, STREAM chunking, ASCII armor, and pure helpers (default output paths, cipher/KDF name parsing). Holds the unit/round-trip/tamper/KAT tests. |
-| `symcrypt-common`| lib              | Terminal glue shared by CLI + TUI: path-or-stdin I/O, clobber check, secure remove, password-source resolution, exit-code mapping. Depends only on core + std. |
-| `symcrypt-cli`   | bin `symcrypt`   | clap arg parsing; password resolution; calls core.                                                                                            |
-| `symcrypt-tui`   | bin `symcrypt-tui` | ratatui + crossterm interactive form. Reuses `symcrypt-common`.                                                                             |
-| `symcrypt-gtk`   | bin `symcrypt-gtk` | relm4 (gtk4-rs) + libadwaita desktop app. **Does not use `symcrypt-common`** — relies on core + GTK-native file handling.                   |
+| `paladin-core`  | lib              | All crypto, KDF, file format/header, STREAM chunking, ASCII armor, and pure helpers (default output paths, cipher/KDF name parsing). Holds the unit/round-trip/tamper/KAT tests. |
+| `paladin-common`| lib              | Terminal glue shared by CLI + TUI: path-or-stdin I/O, clobber check, secure remove, password-source resolution, exit-code mapping. Depends only on core + std. |
+| `paladin-cli`   | bin `paladin`   | clap arg parsing; password resolution; calls core.                                                                                            |
+| `paladin-tui`   | bin `paladin-tui` | ratatui + crossterm interactive form. Reuses `paladin-common`.                                                                             |
+| `paladin-gtk`   | bin `paladin-gtk` | relm4 (gtk4-rs) + libadwaita desktop app. **Does not use `paladin-common`** — relies on core + GTK-native file handling.                   |
 
 Dependency direction: `common`/`cli`/`tui`/`gtk` → `core`; `cli`/`tui` → `common`.
 `gtk` deliberately skips `common`.
@@ -115,7 +115,7 @@ drop) and `EncryptOptions`. Output paths come from the pure helpers
 ### File format & crypto (DESIGN §4–§5)
 
 - Container = authenticated **header** (plaintext, but bound as AEAD AAD) followed
-  by a **STREAM**-chunked body; all integers big-endian. Magic `"SYMCRYPT"`,
+  by a **STREAM**-chunked body; all integers big-endian. Magic `"PALADIN"`,
   `version` byte checked first.
 - The entire serialized header is the AAD for chunk 0, so cipher/KDF/params/
   filename cannot be tampered with (downgrade-resistant).
@@ -130,7 +130,7 @@ drop) and `EncryptOptions`. Output paths come from the pure helpers
 - A failed auth tag is reported as a single condition ("wrong password or
   corrupted/tampered file") — the two are intentionally indistinguishable.
 - Unknown `version`/`cipher_id`/`kdf_id` or any reserved flag bit → reject with
-  exit code 4; symcrypt never guesses at an unrecognized format.
+  exit code 4; paladin never guesses at an unrecognized format.
 
 ### Front-end concurrency pattern (TUI & GTK)
 
@@ -142,14 +142,14 @@ moved into the worker inside a zeroizing buffer.
 
 ## Conventions
 
-- **Tests accompany every code change.** Most coverage lives in `symcrypt-core`
+- **Tests accompany every code change.** Most coverage lives in `paladin-core`
   (round-trip across sizes 0/1/chunk±1/large; tamper/truncate/reorder; KDF
   determinism; committed KAT vectors). The CLI gets `assert_cmd` integration
   tests; GTK relies on manual verification plus the shared core tests.
 - **Security-affecting changes:** state the implications and confirm before
   implementing, and add tests that verify the integrity property.
 - Exit codes: 0 ok · 1 general/IO · 2 usage · 3 auth failure · 4 unsupported
-  format/version · 130 canceled — mapped from `SymError` in `symcrypt-common`,
+  format/version · 130 canceled — mapped from `SymError` in `paladin-common`,
   never classified in the front-ends.
 - Dependency versions are pinned via `cargo add` at scaffolding time.
 

@@ -15,10 +15,10 @@ class StreamingTest < E2ETest
   def test_full_pipe_round_trip
     data = sample_bytes(4096)
     env  = { "PW" => DEFAULT_PASSWORD }
-    enc = symcrypt("-e", "-", "-o", "-", *FAST_KDF, "--password-env", "PW",
+    enc = paladin("-e", "-", "-o", "-", *FAST_KDF, "--password-env", "PW",
                    stdin: data, env: env)
     assert_status enc, 0
-    dec = symcrypt("-d", "-", "-o", "-", "--password-env", "PW",
+    dec = paladin("-d", "-", "-o", "-", "--password-env", "PW",
                    stdin: enc.stdout, env: env)
     assert_status dec, 0
     assert_equal data, dec.stdout
@@ -27,24 +27,24 @@ class StreamingTest < E2ETest
   # Encrypt a file to stdout, then decrypt that captured stream back to a file.
   def test_file_to_stdout_then_decrypt
     env = { "PW" => DEFAULT_PASSWORD }
-    enc = symcrypt("-e", Symcrypt::LOREM, "-o", "-", *FAST_KDF,
+    enc = paladin("-e", Paladin::LOREM, "-o", "-", *FAST_KDF,
                    "--password-env", "PW", env: env)
     assert_status enc, 0
     out = tmp("back.out")
-    dec = symcrypt("-d", "-", "-o", out, "--password-env", "PW",
+    dec = paladin("-d", "-", "-o", out, "--password-env", "PW",
                    stdin: enc.stdout, env: env)
     assert_status dec, 0
-    assert_identical Symcrypt::LOREM, out
+    assert_identical Paladin::LOREM, out
   end
 
   # A multi-chunk (> 64 KiB) payload survives the full stdin/stdout pipe.
   def test_multi_chunk_through_pipe
     data = sample_bytes((3 * CHUNK) + 99)
     env  = { "PW" => DEFAULT_PASSWORD }
-    enc = symcrypt("-e", "-", "-o", "-", *FAST_KDF, "--password-env", "PW",
+    enc = paladin("-e", "-", "-o", "-", *FAST_KDF, "--password-env", "PW",
                    stdin: data, env: env)
     assert_status enc, 0
-    dec = symcrypt("-d", "-", "-o", "-", "--password-env", "PW",
+    dec = paladin("-d", "-", "-o", "-", "--password-env", "PW",
                    stdin: enc.stdout, env: env)
     assert_status dec, 0
     assert_equal data, dec.stdout
@@ -54,12 +54,12 @@ class StreamingTest < E2ETest
   def test_armored_streaming
     data = sample_bytes(2048)
     env  = { "PW" => DEFAULT_PASSWORD }
-    enc = symcrypt("-e", "-", "-a", "-o", "-", *FAST_KDF, "--password-env", "PW",
+    enc = paladin("-e", "-", "-a", "-o", "-", *FAST_KDF, "--password-env", "PW",
                    stdin: data, env: env)
     assert_status enc, 0
-    assert enc.stdout.start_with?("-----BEGIN SYMCRYPT MESSAGE-----"),
+    assert enc.stdout.start_with?("-----BEGIN PALADIN MESSAGE-----"),
            "armored stdout should start with the BEGIN marker"
-    dec = symcrypt("-d", "-", "-o", "-", "--password-env", "PW",
+    dec = paladin("-d", "-", "-o", "-", "--password-env", "PW",
                    stdin: enc.stdout, env: env)
     assert_status dec, 0
     assert_equal data, dec.stdout
@@ -70,16 +70,16 @@ class StreamingTest < E2ETest
   # an output name from).
   def test_stdin_stores_no_filename_and_decrypt_needs_output
     env = { "PW" => DEFAULT_PASSWORD }
-    cipher = tmp("from_stdin.symcrypt")
-    enc = symcrypt("-e", "-", "-o", cipher, *FAST_KDF, "--password-env", "PW",
+    cipher = tmp("from_stdin.paladin")
+    enc = paladin("-e", "-", "-o", cipher, *FAST_KDF, "--password-env", "PW",
                    stdin: sample_bytes(512), env: env)
     assert_status enc, 0
 
-    info = symcrypt("-i", cipher)
+    info = paladin("-i", cipher)
     assert_includes info.stdout, "name_status: absent\n"
 
     # Decrypting from stdin without -o is a usage error.
-    no_out = symcrypt("-d", "-", "--password-env", "PW",
+    no_out = paladin("-d", "-", "--password-env", "PW",
                       stdin: File.binread(cipher), env: env)
     assert_failure no_out, 2, "requires -o"
   end
@@ -89,11 +89,11 @@ class StreamingTest < E2ETest
   def test_quiet_keeps_stdout_pure
     data = sample_bytes(4096)
     env  = { "PW" => DEFAULT_PASSWORD }
-    enc = symcrypt("-e", "-", "-o", "-", "-q", *FAST_KDF, "--password-env", "PW",
+    enc = paladin("-e", "-", "-o", "-", "-q", *FAST_KDF, "--password-env", "PW",
                    stdin: data, env: env)
     assert_status enc, 0
     assert_empty enc.stderr, "--quiet must not emit status to stderr"
-    dec = symcrypt("-d", "-", "-o", "-", "--password-env", "PW",
+    dec = paladin("-d", "-", "-o", "-", "--password-env", "PW",
                    stdin: enc.stdout, env: env)
     assert_status dec, 0
     assert_equal data, dec.stdout, "stdout must be exactly the container"

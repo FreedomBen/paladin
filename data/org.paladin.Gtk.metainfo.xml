@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.paladin.Gtk</id>
+  <name>paladin</name>
+  <summary>Encrypt and decrypt files with a password or keyfile</summary>
+  <metadata_license>FSFAP</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <description>
+    <p>
+      paladin is a simple, safe symmetric file-encryption tool. It encrypts
+      files with authenticated encryption (AES-256-GCM or ChaCha20-Poly1305)
+      using a key derived from a password and/or keyfile. Encrypted files begin
+      with a self-describing, authenticated header, so they can be decrypted with
+      only the secret — no out-of-band parameters.
+    </p>
+    <p>
+      This desktop application offers Encrypt, Decrypt, Info, and Verify modes
+      with file pickers, drag-and-drop, a live progress gauge, and an Advanced
+      section for cipher, KDF, and key-derivation cost settings.
+    </p>
+  </description>
+  <launchable type="desktop-id">org.paladin.Gtk.desktop</launchable>
+  <url type="homepage">https://github.com/benjaminporter/paladin</url>
+  <url type="bugtracker">https://github.com/benjaminporter/paladin/issues</url>
+  <developer id="org.paladin">
+    <name>paladin contributors</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+</component>

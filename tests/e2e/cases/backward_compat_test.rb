@@ -22,7 +22,7 @@ class BackwardCompatTest < E2ETest
     Golden.manifest.each do |g|
       assert File.file?(g[:path]), "missing golden #{g[:file]} — run regenerate_goldens.rb"
       out = tmp("#{g[:file]}.out")
-      dec = symcrypt("-d", g[:path], "-o", out, "--password-env", "GPW",
+      dec = paladin("-d", g[:path], "-o", out, "--password-env", "GPW",
                      env: { "GPW" => Golden::PASSWORD })
       assert_status dec, 0, "golden #{g[:file]} failed to decrypt"
       assert_equal EXPECTED, File.binread(out), "golden #{g[:file]} plaintext mismatch"
@@ -33,7 +33,7 @@ class BackwardCompatTest < E2ETest
   # was generated with — locking the header layout and the shipped KDF defaults.
   def test_each_golden_info_reports_expected_metadata
     Golden.manifest.each do |g|
-      info = symcrypt("-i", g[:path])
+      info = paladin("-i", g[:path])
       assert_status info, 0, "info failed on #{g[:file]}"
       assert_includes info.stdout, "cipher: #{g[:cipher]}\n", "#{g[:file]} cipher"
       assert_includes info.stdout, "kdf: #{g[:kdf]}\n", "#{g[:file]} kdf"
@@ -46,7 +46,7 @@ class BackwardCompatTest < E2ETest
   # other container — the goldens are real, authenticated files.
   def test_wrong_password_against_golden_is_auth_failure
     g = Golden.manifest.first
-    res = symcrypt("-d", g[:path], "-o", tmp("o"), "--password-env", "GPW",
+    res = paladin("-d", g[:path], "-o", tmp("o"), "--password-env", "GPW",
                    env: { "GPW" => "not the golden password" })
     assert_failure res, 3, "authentication failed"
   end

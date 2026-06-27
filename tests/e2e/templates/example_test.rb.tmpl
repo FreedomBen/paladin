@@ -15,30 +15,30 @@ class ExampleTest < E2ETest
   # Happy path: encrypt the fixture, confirm the ciphertext grew, decrypt, and
   # confirm the result is byte-for-byte identical to the original.
   def test_round_trip_matches_original
-    input  = Symcrypt::LOREM
-    cipher = tmp("cipher.symcrypt")
+    input  = Paladin::LOREM
+    cipher = tmp("cipher.paladin")
     plain  = tmp("decrypted.txt")
     env    = { "PW" => DEFAULT_PASSWORD }
 
-    enc = symcrypt("--encrypt", input, "--output", cipher,
+    enc = paladin("--encrypt", input, "--output", cipher,
                    "--password-env", "PW", env: env)
     assert_status enc, 0
     assert_size_grew input, cipher
 
     # Pass --output so the filename restored from the header can't clobber a
     # fixture.
-    dec = symcrypt("--decrypt", cipher, "--output", plain,
+    dec = paladin("--decrypt", cipher, "--output", plain,
                    "--password-env", "PW", env: env)
     assert_status dec, 0
     assert_identical input, plain
   end
 
   # Expected-failure pattern. Confirm the real exit code against DESIGN.md /
-  # symcrypt-common before asserting on it.
+  # paladin-common before asserting on it.
   def test_wrong_password_is_rejected
     skip "example — replace with a real case"
     # cipher = ...
-    # dec = symcrypt("-d", cipher, "-o", tmp("out"), "-p", "wrong-password")
+    # dec = paladin("-d", cipher, "-o", tmp("out"), "-p", "wrong-password")
     # assert_status dec, 3 # auth failure
   end
 end

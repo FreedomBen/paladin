@@ -1,6 +1,6 @@
-# symcrypt — Implementation plan 03: TUI (`symcrypt-tui`)
+# paladin — Implementation plan 03: TUI (`paladin-tui`)
 
-**Status:** Implemented and tested. `symcrypt-core` and `symcrypt-common` are
+**Status:** Implemented and tested. `paladin-core` and `paladin-common` are
 complete (see
 [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md)); the TUI
 builds only on their public APIs and adds no crypto or format logic. The
@@ -9,16 +9,16 @@ checklist below is fully checked off.
 **Target stack:** Rust 1.94+, [ratatui](https://ratatui.rs/) widgets/layout over
 [crossterm](https://docs.rs/crossterm) (raw mode, key + resize events).
 
-**Scope.** The `symcrypt-tui` binary — a single-screen, keyboard-driven
+**Scope.** The `paladin-tui` binary — a single-screen, keyboard-driven
 interactive form that gathers input, builds the same `Secret` /
 `EncryptOptions` every front-end uses, and calls the four core operations
-(`encrypt` / `decrypt` / `inspect` / `verify`). It reuses `symcrypt-common` for
+(`encrypt` / `decrypt` / `inspect` / `verify`). It reuses `paladin-common` for
 all terminal glue (path validation, output finalization, best-effort remove,
 exit-code mapping) and captures the password in its own masked field
 (DESIGN §7).
 
 **Depends on:** [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md)
-— `symcrypt-core` and the `symcrypt-common` terminal glue.
+— `paladin-core` and the `paladin-common` terminal glue.
 
 **Sibling plans:** [`IMPLEMENTATION_PLAN_02_CLI.md`](IMPLEMENTATION_PLAN_02_CLI.md),
 [`IMPLEMENTATION_PLAN_04_GTK.md`](IMPLEMENTATION_PLAN_04_GTK.md).
@@ -31,7 +31,7 @@ The TUI is a *thin view*. It owns only medium-specific concerns and must not
 re-implement anything the core or common crate already provides.
 
 - **No crypto / no format logic.** All four operations go through
-  `symcrypt-core`; all path/clobber/remove logic goes through `symcrypt-common`.
+  `paladin-core`; all path/clobber/remove logic goes through `paladin-common`.
 - **No stdin/stdout streaming.** The terminal UI owns stdin/stdout, so every
   path field accepts filesystem paths only; a literal `-` is **rejected**
   (DESIGN §7.1). The CLI remains the only v1 front-end with `-` streaming.
@@ -50,21 +50,21 @@ re-implement anything the core or common crate already provides.
 
 ## 2. Crate layout & dependencies
 
-`symcrypt-tui` is currently an empty scaffold (`src/main.rs`). Pin versions with
+`paladin-tui` is currently an empty scaffold (`src/main.rs`). Pin versions with
 `cargo add` at implementation time (latest compatible; `Cargo.lock` records the
 resolved set).
 
 | Dependency                  | Purpose                                                        |
 | --------------------------- | ------------------------------------------------------------- |
-| `symcrypt-core` (path)      | The four operations, `EncryptOptions`, helpers, error type.   |
-| `symcrypt-common` (path)    | Path/stdin-reject validators, `OutputSink`, remove, exit map. |
+| `paladin-core` (path)      | The four operations, `EncryptOptions`, helpers, error type.   |
+| `paladin-common` (path)    | Path/stdin-reject validators, `OutputSink`, remove, exit map. |
 | `ratatui`                   | Widgets and layout (`Tabs`, `Gauge`, `Paragraph`, blocks).    |
 | `crossterm`                 | Terminal backend: raw mode, alternate screen, key/resize.     |
-| `clap` (derive)             | Optional launch path only (`symcrypt-tui <file>`).            |
+| `clap` (derive)             | Optional launch path only (`paladin-tui <file>`).            |
 | `zeroize`                   | `Zeroizing` buffer for the masked password (DESIGN §7.2).     |
 | `anyhow`                    | Error context in `main` startup/teardown paths.               |
 
-`tempfile` is pulled in transitively through `symcrypt-common` (temp-file
+`tempfile` is pulled in transitively through `paladin-common` (temp-file
 finalization) and directly under `[dev-dependencies]` for tests.
 
 Proposed internal modules (organization detail; DESIGN only mandates the
@@ -115,11 +115,11 @@ A single full-screen form (DESIGN §7.1). State lives in one `App` struct that
   as a field error rather than waiting for the run.
 - **Encrypt prefill:** when the input becomes valid (and output is not dirty),
   set output to `core::default_encrypt_output(input, armor)`. Re-derive when the
-  `--armor` toggle flips (`.symcrypt` ↔ `.symcrypt.asc`).
+  `--armor` toggle flips (`.paladin` ↔ `.paladin.asc`).
 - **Decrypt prefill:** stored names need the header, so on a valid input call
   `core::inspect(open_input(input))` and prefill with
   `core::default_decrypt_output(input, &header)`. If inspect fails (not a
-  symcrypt file / malformed), show a hint and leave the field for the user.
+  paladin file / malformed), show a hint and leave the field for the user.
 
 ### 4.2 Password & secret assembly (`options.rs`, pure + tested)
 
@@ -187,7 +187,7 @@ Mirror DESIGN §6.4 semantics in-UI, then hand bytes to the core:
   any temp output, and the UI shows a **non-error** canceled state. A KDF call
   already running may finish first.
 - Error messages and the **process exit code** come from
-  `symcrypt-common` (`exit_code` / `AppError::exit_code`): per-operation
+  `paladin-common` (`exit_code` / `AppError::exit_code`): per-operation
   failures are shown in-UI without exiting, and the last **completed**
   operation's result maps to the exit status on a normal quit (success → 0, auth
   failure → 3, and so on). A user-acknowledged cancellation is non-error — it
@@ -250,16 +250,16 @@ logic into pure, unit-tested functions (`options.rs`, `field.rs`) and keep
 
 Headless terminal-driver tests over a ratatui `TestBackend` are a stretch goal
 for the static layout; the four operations are already covered exhaustively in
-`symcrypt-core`, so the TUI tests focus on its own glue (DESIGN §10).
+`paladin-core`, so the TUI tests focus on its own glue (DESIGN §10).
 
 ---
 
 ## 7. Docs & packaging
 
-- `symcrypt-tui.1` man page (synopsis, key bindings, mode descriptions).
+- `paladin-tui.1` man page (synopsis, key bindings, mode descriptions).
 - README usage section + key-binding reference; note GTK/CLI differences
   (no `-` streaming, no password-file/env).
-- `cargo install -p symcrypt-tui` produces the `symcrypt-tui` binary.
+- `cargo install -p paladin-tui` produces the `paladin-tui` binary.
 
 ---
 
@@ -268,7 +268,7 @@ for the static layout; the four operations are already covered exhaustively in
 **Phase 0 — Scaffold**
 
 - [x] Add deps via `cargo add` (ratatui, crossterm, clap derive, zeroize,
-      anyhow) + `symcrypt-core`/`symcrypt-common` path deps.
+      anyhow) + `paladin-core`/`paladin-common` path deps.
 - [x] Terminal setup/teardown: raw mode + alternate screen, panic-safe restore,
       `main` mapping startup errors via `common`.
 - [x] App skeleton renders an empty form; `Esc`/`Ctrl-C` quit cleanly.
@@ -314,9 +314,9 @@ for the static layout; the four operations are already covered exhaustively in
 
 **Phase 7 — Docs & packaging**
 
-- [x] `symcrypt-tui.1` man page.
+- [x] `paladin-tui.1` man page.
 - [x] README usage + key-binding reference.
-- [x] `cargo install -p symcrypt-tui`.
+- [x] `cargo install -p paladin-tui`.
 
 ---
 

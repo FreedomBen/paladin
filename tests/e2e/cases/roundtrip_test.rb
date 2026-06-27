@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 #
-# End-to-end round-trip coverage for the symcrypt CLI: decrypting an encrypted
+# End-to-end round-trip coverage for the paladin CLI: decrypting an encrypted
 # container must reproduce the input byte-for-byte, and the container is always
 # larger than the plaintext (self-describing header + per-chunk AEAD tags).
 #
@@ -17,19 +17,19 @@ class RoundtripTest < E2ETest
   # decrypt and confirm a byte-for-byte match. Uses the real default KDF
   # (Argon2id), so this doubles as a realistic smoke test.
   def test_fixture_round_trips_with_defaults
-    cipher = tmp("lorem.symcrypt")
+    cipher = tmp("lorem.paladin")
     plain  = tmp("lorem.decrypted.txt")
     env    = { "PW" => DEFAULT_PASSWORD }
 
-    enc = symcrypt("--encrypt", Symcrypt::LOREM, "--output", cipher,
+    enc = paladin("--encrypt", Paladin::LOREM, "--output", cipher,
                    "--password-env", "PW", env: env)
     assert_status enc, 0
-    assert_size_grew Symcrypt::LOREM, cipher
+    assert_size_grew Paladin::LOREM, cipher
 
-    dec = symcrypt("--decrypt", cipher, "--output", plain,
+    dec = paladin("--decrypt", cipher, "--output", plain,
                    "--password-env", "PW", env: env)
     assert_status dec, 0
-    assert_identical Symcrypt::LOREM, plain
+    assert_identical Paladin::LOREM, plain
   end
 
   # Round-trips must hold for empty input and at/around the 64 KiB STREAM chunk
@@ -40,36 +40,36 @@ class RoundtripTest < E2ETest
 
     sizes.each do |size|
       input  = make_input("plain_#{size}.bin", size)
-      cipher = tmp("cipher_#{size}.symcrypt")
+      cipher = tmp("cipher_#{size}.paladin")
       plain  = tmp("plain_#{size}.out")
 
-      enc = symcrypt("--encrypt", input, "--output", cipher, *FAST_KDF,
+      enc = paladin("--encrypt", input, "--output", cipher, *FAST_KDF,
                      "--password-env", "PW", env: env)
       assert_status enc, 0, "encrypt failed for size #{size}"
       assert_size_grew input, cipher, "ciphertext not larger than plaintext for size #{size}"
 
-      dec = symcrypt("--decrypt", cipher, "--output", plain,
+      dec = paladin("--decrypt", cipher, "--output", plain,
                      "--password-env", "PW", env: env)
       assert_status dec, 0, "decrypt failed for size #{size}"
       assert_identical input, plain, "round-trip mismatch for size #{size}"
     end
   end
 
-  # Without --output, encrypt appends ".symcrypt" beside the input (DESIGN §6.5).
+  # Without --output, encrypt appends ".paladin" beside the input (DESIGN §6.5).
   # Operate on a copy inside the temp dir so the default output lands there.
   def test_default_encrypt_output_name
-    input = write_input("note.txt", File.binread(Symcrypt::LOREM))
+    input = write_input("note.txt", File.binread(Paladin::LOREM))
     env   = { "PW" => DEFAULT_PASSWORD }
 
-    enc = symcrypt("--encrypt", input, *FAST_KDF, "--password-env", "PW", env: env)
+    enc = paladin("--encrypt", input, *FAST_KDF, "--password-env", "PW", env: env)
     assert_status enc, 0
 
-    cipher = "#{input}.symcrypt"
+    cipher = "#{input}.paladin"
     assert File.file?(cipher), "expected default ciphertext at #{cipher}"
     assert_size_grew input, cipher
 
     plain = tmp("note.decrypted.txt")
-    dec = symcrypt("--decrypt", cipher, "--output", plain,
+    dec = paladin("--decrypt", cipher, "--output", plain,
                    "--password-env", "PW", env: env)
     assert_status dec, 0
     assert_identical input, plain

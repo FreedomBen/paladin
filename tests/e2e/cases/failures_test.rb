@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 #
-# End-to-end exit-code matrix for the symcrypt CLI. Each failure class must map
-# to the documented exit code (DESIGN + symcrypt-common/src/error.rs):
+# End-to-end exit-code matrix for the paladin CLI. Each failure class must map
+# to the documented exit code (DESIGN + paladin-common/src/error.rs):
 #
 #   0 ok · 1 general/IO · 2 usage · 3 auth failure · 4 unsupported format · 130 cancel
 #
@@ -21,17 +21,17 @@ class FailuresTest < E2ETest
   def test_auth_failures_are_indistinguishable
     env = { "PW" => DEFAULT_PASSWORD }
 
-    wrong_pw = symcrypt("--decrypt", good_cipher("a.symcrypt"), "--output", tmp("o1"),
+    wrong_pw = paladin("--decrypt", good_cipher("a.paladin"), "--output", tmp("o1"),
                         "--password-env", "PW", env: { "PW" => "wrong-password" })
 
-    tampered_file = good_cipher("b.symcrypt")
+    tampered_file = good_cipher("b.paladin")
     flip_byte(tampered_file, File.size(tampered_file) - 1) # last byte = final AEAD tag
-    tampered = symcrypt("--decrypt", tampered_file, "--output", tmp("o2"),
+    tampered = paladin("--decrypt", tampered_file, "--output", tmp("o2"),
                         "--password-env", "PW", env: env)
 
-    truncated_file = good_cipher("c.symcrypt")
+    truncated_file = good_cipher("c.paladin")
     truncate_input(truncated_file, 10)
-    truncated = symcrypt("--decrypt", truncated_file, "--output", tmp("o3"),
+    truncated = paladin("--decrypt", truncated_file, "--output", tmp("o3"),
                          "--password-env", "PW", env: env)
 
     results = { wrong_pw: wrong_pw, tampered: tampered, truncated: truncated }
@@ -50,61 +50,61 @@ class FailuresTest < E2ETest
   def test_verify_reports_auth_failure
     good = good_cipher
 
-    bad = symcrypt("--verify", good, "--password-env", "PW",
+    bad = paladin("--verify", good, "--password-env", "PW",
                    env: { "PW" => "wrong-password" })
     assert_failure bad, 3, AUTH_MSG
 
-    ok = symcrypt("--verify", good, "--password-env", "PW",
+    ok = paladin("--verify", good, "--password-env", "PW",
                   env: { "PW" => DEFAULT_PASSWORD })
     assert_status ok, 0, "control: --verify with the correct password should succeed"
   end
 
   # ---- exit 4: unsupported / unrecognized format ----------------------------
 
-  def test_not_a_symcrypt_file_is_rejected
-    junk = write_input("junk.bin", "this is not a symcrypt container, just text")
+  def test_not_a_paladin_file_is_rejected
+    junk = write_input("junk.bin", "this is not a paladin container, just text")
 
-    dec = symcrypt("--decrypt", junk, "--output", tmp("o"),
+    dec = paladin("--decrypt", junk, "--output", tmp("o"),
                    "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
-    assert_failure dec, 4, "not a symcrypt file (bad magic)"
+    assert_failure dec, 4, "not a recognized paladin or AES Crypt file (bad magic)"
 
     # --info needs no password and must also reject it.
-    assert_failure symcrypt("--info", junk), 4, "not a symcrypt file (bad magic)"
+    assert_failure paladin("--info", junk), 4, "not a recognized paladin or AES Crypt file (bad magic)"
   end
 
   def test_unsupported_version_is_rejected
-    f = good_cipher("badver.symcrypt")
+    f = good_cipher("badver.paladin")
     flip_byte(f, 8) # version byte, immediately after the 8-byte magic
 
-    dec = symcrypt("--decrypt", f, "--output", tmp("o"),
+    dec = paladin("--decrypt", f, "--output", tmp("o"),
                    "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
-    assert_failure dec, 4, "unsupported symcrypt version"
+    assert_failure dec, 4, "unsupported paladin version"
 
     # Version is checked first, so even --info (no password) rejects it.
-    assert_failure symcrypt("--info", f), 4, "unsupported symcrypt version"
+    assert_failure paladin("--info", f), 4, "unsupported paladin version"
   end
 
   # ---- exit 2: refuse-to-overwrite, missing input, usage / bad options ------
 
   def test_refuse_to_overwrite_without_force
-    target = good_cipher("keep.symcrypt")
+    target = good_cipher("keep.paladin")
     before = File.binread(target)
     src    = write_input("plain.txt", "different content\n")
     env    = { "PW" => DEFAULT_PASSWORD }
 
-    refused = symcrypt("--encrypt", src, "--output", target, *FAST_KDF,
+    refused = paladin("--encrypt", src, "--output", target, *FAST_KDF,
                        "--password-env", "PW", env: env)
     assert_failure refused, 2, "already exists"
     assert_equal before, File.binread(target), "a refused encrypt must not touch the existing file"
 
-    forced = symcrypt("--encrypt", src, "--output", target, "--force", *FAST_KDF,
+    forced = paladin("--encrypt", src, "--output", target, "--force", *FAST_KDF,
                       "--password-env", "PW", env: env)
     assert_status forced, 0, "--force should overwrite"
     refute_equal before, File.binread(target), "--force should have rewritten the file"
   end
 
   def test_missing_input_file_is_usage_error
-    res = symcrypt("--decrypt", tmp("does-not-exist.symcrypt"), "--output", tmp("o"),
+    res = paladin("--decrypt", tmp("does-not-exist.paladin"), "--output", tmp("o"),
                    "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
     assert_failure res, 2, "cannot use"
   end
@@ -114,16 +114,16 @@ class FailuresTest < E2ETest
     env = { "PW" => DEFAULT_PASSWORD }
 
     # No mode selected (clap: required group).
-    assert_status symcrypt(src, "--password-env", "PW", env: env), 2, "no mode should be usage error"
+    assert_status paladin(src, "--password-env", "PW", env: env), 2, "no mode should be usage error"
     # Mutually exclusive modes (clap: conflict).
-    assert_status symcrypt("--encrypt", "--decrypt", src, "-p", "x"), 2, "-e and -d conflict"
+    assert_status paladin("--encrypt", "--decrypt", src, "-p", "x"), 2, "-e and -d conflict"
     # Missing FILE argument (clap: required arg).
-    assert_status symcrypt("--encrypt", "-p", "x"), 2, "missing FILE should be usage error"
+    assert_status paladin("--encrypt", "-p", "x"), 2, "missing FILE should be usage error"
     # App-level validation: empty password needs a keyfile.
-    assert_failure symcrypt("--encrypt", src, "--output", tmp("o"), "--no-password"),
+    assert_failure paladin("--encrypt", src, "--output", tmp("o"), "--no-password"),
                    2, "--no-password requires a keyfile"
     # App-level validation: KDF cost out of range.
-    range = symcrypt("--encrypt", src, "--output", tmp("o2"),
+    range = paladin("--encrypt", src, "--output", tmp("o2"),
                      "--kdf", "pbkdf2", "--pbkdf2-iterations", "1",
                      "--password-env", "PW", env: env)
     assert_failure range, 2, "out of range"
@@ -133,10 +133,10 @@ class FailuresTest < E2ETest
 
   # Produce a valid encrypted container in the temp dir; returns its path. The
   # payload is comfortably larger than the header so truncation lands in the body.
-  def good_cipher(name = "good.symcrypt", plaintext: ("symcrypt e2e payload " * 16))
+  def good_cipher(name = "good.paladin", plaintext: ("paladin e2e payload " * 16))
     src    = write_input("src-#{name}.txt", plaintext)
     cipher = tmp(name)
-    res = symcrypt("--encrypt", src, "--output", cipher, *FAST_KDF,
+    res = paladin("--encrypt", src, "--output", cipher, *FAST_KDF,
                    "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
     assert_status res, 0, "good_cipher setup failed: #{res.stderr}"
     cipher

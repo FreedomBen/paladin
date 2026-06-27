@@ -1,4 +1,4 @@
-# nfpm config — symcrypt-tui package (.deb / .rpm).
+# nfpm config — paladin-tui package (.deb / .rpm).
 #
 # Built via `make package` (or package-deb / package-rpm), which exports the
 # VERSION and ARCH variables referenced below. To run nfpm by hand, set them
@@ -6,7 +6,7 @@
 #   VERSION=0.1.0 ARCH=amd64 nfpm package -f packaging/nfpm-tui.yaml -p deb -t dist
 #
 # nfpm reference: https://nfpm.goreleaser.com
-name: symcrypt-tui
+name: paladin-tui
 arch: ${ARCH}
 platform: linux
 version: ${VERSION}
@@ -15,23 +15,23 @@ section: utils
 priority: optional
 maintainer: "Benjamin Porter <FreedomBen@users.noreply.github.com>"
 vendor: "Benjamin Porter"
-homepage: "https://github.com/benjaminporter/symcrypt"
+homepage: "https://github.com/benjaminporter/paladin"
 license: "MIT OR Apache-2.0"
 description: |
   Simple, safe symmetric file encryption (interactive terminal UI).
 
-  An interactive, full-screen terminal front-end over the same symcrypt core
+  An interactive, full-screen terminal front-end over the same paladin core
   as the CLI: AES-256-GCM (or ChaCha20-Poly1305) with an Argon2id-derived key
   and a self-describing, authenticated file format. This package installs the
-  `symcrypt-tui` command and its man page.
+  `paladin-tui` command and its man page.
 
 contents:
-  - src: ./target/release/symcrypt-tui
-    dst: /usr/bin/symcrypt-tui
+  - src: ./target/release/paladin-tui
+    dst: /usr/bin/paladin-tui
     file_info:
       mode: 0755
-  - src: ./docs/symcrypt-tui.1
-    dst: /usr/share/man/man1/symcrypt-tui.1
+  - src: ./docs/paladin-tui.1
+    dst: /usr/share/man/man1/paladin-tui.1
     file_info:
       mode: 0644
 

@@ -1,18 +1,18 @@
-# symcrypt CLI — end-to-end test suite
+# paladin CLI — end-to-end test suite
 
-Black-box tests that drive the **real built `symcrypt` binary** the way a user
+Black-box tests that drive the **real built `paladin` binary** the way a user
 would from a shell: encrypting and decrypting real files, exercising password
 and keyfile plumbing, shell pipelines, exit codes, and the on-disk format.
 
 ## Scope (and how it differs from the Rust tests)
 
-The `symcrypt-cli` crate already has in-process `assert_cmd` integration tests
-(`crates/symcrypt-cli/tests/it_*.rs`) covering cipher, flags, info, IO errors,
+The `paladin-cli` crate already has in-process `assert_cmd` integration tests
+(`crates/paladin-cli/tests/it_*.rs`) covering cipher, flags, info, IO errors,
 round-trip, secret handling, and stdio. This suite is **complementary** — it
 covers what only an external, full-binary test can:
 
 - the compiled binary as invoked from a shell (args, env vars, exit codes);
-- real shell pipelines / redirection (`… | symcrypt -e - | symcrypt -d - > out`);
+- real shell pipelines / redirection (`… | paladin -e - | paladin -d - > out`);
 - password sources on the real filesystem (`--password-file`, `--password-env`);
 - armored output inspected with shell tooling;
 - large / binary / chunk-boundary inputs end-to-end;
@@ -25,9 +25,9 @@ Prefer user-visible behavior over re-proving the fine-grained Rust assertions.
 
 | Path                              | Purpose                                                                          |
 | --------------------------------- | ------------------------------------------------------------------------------- |
-| `run.sh`                          | Build the CLI (unless `SYMCRYPT_BIN` is set), then run the suite.                |
+| `run.sh`                          | Build the CLI (unless `PALADIN_BIN` is set), then run the suite.                |
 | `runner.rb`                       | Pure-Ruby runner: loads every case and lets minitest run them.                   |
-| `test_helper.rb`                  | Base `E2ETest` class: per-test temp dir, the `symcrypt` runner, and assertions.  |
+| `test_helper.rb`                  | Base `E2ETest` class: per-test temp dir, the `paladin` runner, and assertions.  |
 | `cases/`                          | The test files (`*_test.rb`), one per backlog area.                              |
 | `golden_manifest.rb`              | Single source of truth for the backward-compat goldens (password, plaintext, manifest). |
 | `regenerate_goldens.rb`           | Deliberate regenerator for `../fixtures/golden/` (refuses to clobber without `--force`). |
@@ -46,23 +46,23 @@ make e2e ARGS="-n /round_trip/"   # filter by test name
 # …or call the runner directly:
 tests/e2e/run.sh                  # build + run everything
 tests/e2e/run.sh -n /round_trip/  # filter by test name (minitest passthrough)
-SYMCRYPT_BIN=target/release/symcrypt tests/e2e/run.sh   # test a release build
-SYMCRYPT_E2E_SLOW=1 tests/e2e/run.sh                    # also run the opt-in slow cases
+PALADIN_BIN=target/release/paladin tests/e2e/run.sh   # test a release build
+PALADIN_E2E_SLOW=1 tests/e2e/run.sh                    # also run the opt-in slow cases
 ```
 
 The advanced cases (large-file round-trip, SIGINT cancellation) are slow or
-timing-sensitive, so they are skipped unless `SYMCRYPT_E2E_SLOW=1` is set.
+timing-sensitive, so they are skipped unless `PALADIN_E2E_SLOW=1` is set.
 
 ## Adding a case
 
 1. `cp templates/example_test.rb.tmpl cases/<area>_test.rb`
 2. Subclass `E2ETest` and write `test_*` methods.
 3. Use the provided helpers instead of re-rolling them:
-   - `symcrypt(*args, stdin:, env:)` → `Result(status, stdout, stderr)`
+   - `paladin(*args, stdin:, env:)` → `Result(status, stdout, stderr)`
    - `tmp(name)`, `write_input`, `make_input(name, size)`, `make_keyfile`
    - `flip_byte`, `set_byte`, `truncate_input` (tamper / truncate cases)
    - `assert_size_grew`, `assert_identical`, `assert_status`, `assert_failure`
-   - constants: `Symcrypt::LOREM`, `Symcrypt::GOLDEN_DIR`, `DEFAULT_PASSWORD`, `CHUNK`, `FAST_KDF`
+   - constants: `Paladin::LOREM`, `Paladin::GOLDEN_DIR`, `DEFAULT_PASSWORD`, `CHUNK`, `FAST_KDF`
 4. Each test gets a fresh temp dir (`@tmpdir`), removed automatically on teardown.
 
 ## Conventions
@@ -80,7 +80,7 @@ and the behaviors confirmed against the binary.
 
 | File                          | Covers                                                                 |
 | ----------------------------- | --------------------------------------------------------------------- |
-| `roundtrip_test.rb`           | Round-trip identity across sizes (empty + 64 KiB boundary), default `.symcrypt` name. |
+| `roundtrip_test.rb`           | Round-trip identity across sizes (empty + 64 KiB boundary), default `.paladin` name. |
 | `failures_test.rb`            | Exit-code matrix: auth (3), format/version (4), usage/overwrite (2).   |
 | `cipher_test.rb`              | Both ciphers, header-driven decrypt, `--info`, invalid name, multi-chunk. |
 | `kdf_test.rb`                 | Each KDF + custom costs, out-of-range/mismatched knobs, `--info` params. |
@@ -93,7 +93,7 @@ and the behaviors confirmed against the binary.
 | `io_errors_test.rb`           | Exit 1 paths (missing/read-only out dir, unreadable input); dir input → 2. |
 | `backward_compat_test.rb`     | Decrypt committed goldens (cipher×KDF, armored, stdin) + `--info` lock.  |
 | `misc_test.rb`                | Header authentication / no-downgrade, reserved flags, fresh randomness, help/version. |
-| `advanced_test.rb`            | Opt-in (`SYMCRYPT_E2E_SLOW=1`): large-file round-trip, SIGINT cancellation. |
+| `advanced_test.rb`            | Opt-in (`PALADIN_E2E_SLOW=1`): large-file round-trip, SIGINT cancellation. |
 
 ### Backward-compatibility goldens
 

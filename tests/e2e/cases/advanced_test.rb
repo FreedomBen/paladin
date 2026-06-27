@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 #
 # Advanced / opt-in cases: a multi-megabyte round-trip and SIGINT cancellation.
-# Both are slow and/or timing-sensitive, so they only run when SYMCRYPT_E2E_SLOW
+# Both are slow and/or timing-sensitive, so they only run when PALADIN_E2E_SLOW
 # is set:
 #
-#   SYMCRYPT_E2E_SLOW=1 tests/e2e/run.sh
+#   PALADIN_E2E_SLOW=1 tests/e2e/run.sh
 #
 # They are otherwise skipped (and reported as skips) so the default suite stays
 # fast and deterministic.
@@ -14,18 +14,18 @@ require "test_helper"
 class AdvancedTest < E2ETest
   # A multi-MB payload round-trips end-to-end (STREAM across many chunks).
   def test_large_file_round_trip
-    skip "slow; set SYMCRYPT_E2E_SLOW=1 to run" unless slow_enabled?
+    skip "slow; set PALADIN_E2E_SLOW=1 to run" unless slow_enabled?
 
     size   = 8 * 1024 * 1024 # 8 MiB: well past the 64 KiB chunk boundary
     input  = make_input("large.bin", size)
-    cipher = tmp("large.symcrypt")
+    cipher = tmp("large.paladin")
     out    = tmp("large.out")
     env    = { "PW" => DEFAULT_PASSWORD }
 
-    enc = symcrypt("-e", input, "-o", cipher, *FAST_KDF, "--password-env", "PW", env: env)
+    enc = paladin("-e", input, "-o", cipher, *FAST_KDF, "--password-env", "PW", env: env)
     assert_status enc, 0
     assert_size_grew input, cipher
-    dec = symcrypt("-d", cipher, "-o", out, "--password-env", "PW", env: env)
+    dec = paladin("-d", cipher, "-o", out, "--password-env", "PW", env: env)
     assert_status dec, 0
     assert_identical input, out
   end
@@ -35,14 +35,14 @@ class AdvancedTest < E2ETest
   #
   # Reads an endless stream (/dev/zero) so the process is reliably still
   # streaming when the signal lands — no race on a fixed-size input finishing
-  # first. Spawned directly (not via the `symcrypt` helper) so we hold the PID.
+  # first. Spawned directly (not via the `paladin` helper) so we hold the PID.
   def test_sigint_cancels_and_removes_partial_output
-    skip "timing-sensitive; set SYMCRYPT_E2E_SLOW=1 to run" unless slow_enabled?
+    skip "timing-sensitive; set PALADIN_E2E_SLOW=1 to run" unless slow_enabled?
     skip "/dev/zero not available" unless File.readable?("/dev/zero")
 
-    out = tmp("canceled.symcrypt")
+    out = tmp("canceled.paladin")
     pid = Process.spawn(
-      { "PW" => DEFAULT_PASSWORD }, Symcrypt.binary,
+      { "PW" => DEFAULT_PASSWORD }, Paladin.binary,
       "-e", "-", "-o", out, *FAST_KDF, "--password-env", "PW", "--no-progress",
       in: "/dev/zero", out: File::NULL, err: File::NULL
     )
@@ -57,6 +57,6 @@ class AdvancedTest < E2ETest
   private
 
   def slow_enabled?
-    %w[1 true yes].include?(ENV["SYMCRYPT_E2E_SLOW"].to_s.downcase)
+    %w[1 true yes].include?(ENV["PALADIN_E2E_SLOW"].to_s.downcase)
   end
 end

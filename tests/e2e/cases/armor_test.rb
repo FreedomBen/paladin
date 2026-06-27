@@ -3,14 +3,14 @@
 # ASCII armor (DESIGN §5.6, §6.5). `-a/--armor` wraps the binary container in a
 # PEM-style base64 envelope; decrypt/verify/info auto-detect armor, so they never
 # need `-a`. This suite asserts the on-the-wire text shape (markers, 7-bit ASCII),
-# the default `.symcrypt.asc` name, streaming through stdout, and that the reader
+# the default `.paladin.asc` name, streaming through stdout, and that the reader
 # is lenient about surrounding whitespace yet still authenticates the payload.
 
 require "test_helper"
 
 class ArmorTest < E2ETest
-  BEGIN_MARKER = "-----BEGIN SYMCRYPT MESSAGE-----"
-  END_MARKER   = "-----END SYMCRYPT MESSAGE-----"
+  BEGIN_MARKER = "-----BEGIN PALADIN MESSAGE-----"
+  END_MARKER   = "-----END PALADIN MESSAGE-----"
 
   # `-a` encrypt, then auto-detected decrypt, reproduces the input.
   def test_armored_round_trip
@@ -18,12 +18,12 @@ class ArmorTest < E2ETest
     out    = tmp("a.out")
     env    = { "PW" => DEFAULT_PASSWORD }
 
-    enc = symcrypt("-e", Symcrypt::LOREM, "-o", cipher, "-a", *FAST_KDF,
+    enc = paladin("-e", Paladin::LOREM, "-o", cipher, "-a", *FAST_KDF,
                    "--password-env", "PW", env: env)
     assert_status enc, 0
-    dec = symcrypt("-d", cipher, "-o", out, "--password-env", "PW", env: env)
+    dec = paladin("-d", cipher, "-o", out, "--password-env", "PW", env: env)
     assert_status dec, 0
-    assert_identical Symcrypt::LOREM, out
+    assert_identical Paladin::LOREM, out
   end
 
   # Armored output is 7-bit printable ASCII: every byte is a newline or in the
@@ -44,37 +44,37 @@ class ArmorTest < E2ETest
     assert_includes lines, END_MARKER, "an END marker line must be present"
   end
 
-  # Without `-o`, armored encrypt appends `.symcrypt.asc` beside the input
+  # Without `-o`, armored encrypt appends `.paladin.asc` beside the input
   # (DESIGN §6.5). Operate on a copy in the temp dir so the default lands there.
   def test_default_armored_output_name
-    input = write_input("note.txt", File.binread(Symcrypt::LOREM))
-    enc = symcrypt("-e", input, "-a", *FAST_KDF,
+    input = write_input("note.txt", File.binread(Paladin::LOREM))
+    enc = paladin("-e", input, "-a", *FAST_KDF,
                    "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
     assert_status enc, 0
-    assert File.file?("#{input}.symcrypt.asc"),
-           "expected default armored output at #{input}.symcrypt.asc"
+    assert File.file?("#{input}.paladin.asc"),
+           "expected default armored output at #{input}.paladin.asc"
   end
 
   # `--info` auto-detects armor and reports the header.
   def test_info_on_armored_file
     cipher = armor_fixture("info.asc")
-    info = symcrypt("-i", cipher)
+    info = paladin("-i", cipher)
     assert_status info, 0
-    assert_includes info.stdout, "format: symcrypt\n"
+    assert_includes info.stdout, "format: paladin\n"
   end
 
   # Armor to stdout emits text, and that text round-trips back through `-d -`.
   def test_armor_to_stdout_round_trips
     env = { "PW" => DEFAULT_PASSWORD }
-    enc = symcrypt("-e", Symcrypt::LOREM, "-o", "-", "-a", *FAST_KDF,
+    enc = paladin("-e", Paladin::LOREM, "-o", "-", "-a", *FAST_KDF,
                    "--password-env", "PW", env: env)
     assert_status enc, 0
     assert enc.stdout.start_with?(BEGIN_MARKER), "stdout should be armored text"
 
-    dec = symcrypt("-d", "-", "-o", "-", "--password-env", "PW",
+    dec = paladin("-d", "-", "-o", "-", "--password-env", "PW",
                    stdin: enc.stdout, env: env)
     assert_status dec, 0
-    assert_equal File.binread(Symcrypt::LOREM), dec.stdout
+    assert_equal File.binread(Paladin::LOREM), dec.stdout
   end
 
   # A multi-chunk (> 64 KiB) payload round-trips through armor. LOREM is ~293 KiB,
@@ -84,10 +84,10 @@ class ArmorTest < E2ETest
     cipher = tmp("big.asc")
     out    = tmp("big.out")
     env    = { "PW" => DEFAULT_PASSWORD }
-    enc = symcrypt("-e", input, "-o", cipher, "-a", *FAST_KDF,
+    enc = paladin("-e", input, "-o", cipher, "-a", *FAST_KDF,
                    "--password-env", "PW", env: env)
     assert_status enc, 0
-    dec = symcrypt("-d", cipher, "-o", out, "--password-env", "PW", env: env)
+    dec = paladin("-d", cipher, "-o", out, "--password-env", "PW", env: env)
     assert_status dec, 0
     assert_identical input, out
   end
@@ -97,7 +97,7 @@ class ArmorTest < E2ETest
   def test_tampered_armored_payload_is_auth_failure
     cipher = armor_fixture("tamper.asc")
     flip_armor_body_char(cipher)
-    res = symcrypt("-d", cipher, "-o", tmp("o"), "--password-env", "PW",
+    res = paladin("-d", cipher, "-o", tmp("o"), "--password-env", "PW",
                    env: { "PW" => DEFAULT_PASSWORD })
     assert_failure res, 3, "authentication failed"
   end
@@ -111,10 +111,10 @@ class ArmorTest < E2ETest
     messy  = write_input("messy.asc", padded)
 
     out = tmp("lenient.out")
-    dec = symcrypt("-d", messy, "-o", out, "--password-env", "PW",
+    dec = paladin("-d", messy, "-o", out, "--password-env", "PW",
                    env: { "PW" => DEFAULT_PASSWORD })
     assert_status dec, 0
-    assert_identical Symcrypt::LOREM, out
+    assert_identical Paladin::LOREM, out
   end
 
   private
@@ -122,7 +122,7 @@ class ArmorTest < E2ETest
   # Produce an armored container of the LOREM fixture; returns its path.
   def armor_fixture(name)
     cipher = tmp(name)
-    res = symcrypt("-e", Symcrypt::LOREM, "-o", cipher, "-a", *FAST_KDF,
+    res = paladin("-e", Paladin::LOREM, "-o", cipher, "-a", *FAST_KDF,
                    "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
     assert_status res, 0, "armor_fixture setup failed: #{res.stderr}"
     cipher

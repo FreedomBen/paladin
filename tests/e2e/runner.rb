@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 #
-# Pure-Ruby runner for the symcrypt CLI end-to-end suite. We avoid Rake because
+# Pure-Ruby runner for the paladin CLI end-to-end suite. We avoid Rake because
 # this environment ships no `rake` gem; this loads every cases/**/*_test.rb and
 # lets minitest run them. Any arguments are passed through to minitest:
 #
@@ -14,14 +14,14 @@
 $LOAD_PATH.unshift(__dir__)
 require "test_helper"
 
-unless File.executable?(Symcrypt.binary)
-  warn "symcrypt binary not found at #{Symcrypt.binary}"
-  warn "build it first:  cargo build -p symcrypt-cli   (or set SYMCRYPT_BIN)"
+unless File.executable?(Paladin.binary)
+  warn "paladin binary not found at #{Paladin.binary}"
+  warn "build it first:  cargo build -p paladin-cli   (or set PALADIN_BIN)"
   exit 1
 end
 
 cases = Dir.glob(File.join(__dir__, "cases", "**", "*_test.rb")).sort
-warn "symcrypt E2E: binary=#{Symcrypt.binary}  cases=#{cases.size}"
+warn "paladin E2E: binary=#{Paladin.binary}  cases=#{cases.size}"
 cases.each { |file| require file }
 
 # minitest/autorun (pulled in via test_helper) runs the loaded cases at exit.

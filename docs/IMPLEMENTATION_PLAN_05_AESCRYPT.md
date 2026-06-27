@@ -1,14 +1,14 @@
-# symcrypt — Implementation plan 05: AES Crypt read support
+# paladin — Implementation plan 05: AES Crypt read support
 
 **Status:** **Implemented for Stream Format 1 and 2** across the core and all
 three front-ends; **Stream Format 3 is deferred** (see [§12](#12-decisions)).
 Adds **decryption, verification, and inspection of foreign
 [AES Crypt](https://www.aescrypt.com/) (`.aes`) files**. Encryption to the AES
-Crypt format is **out of scope** — symcrypt only ever *writes* its own container
+Crypt format is **out of scope** — paladin only ever *writes* its own container
 (DESIGN §5).
 **Last updated:** 2026-06-08.
 
-**Scope.** Teach `symcrypt-core` to recognize an AES Crypt container, derive its
+**Scope.** Teach `paladin-core` to recognize an AES Crypt container, derive its
 key with the AES Crypt KDFs, verify its HMACs, and stream out the plaintext, so
 the four operations behave as follows on a `.aes` file:
 
@@ -17,10 +17,10 @@ the four operations behave as follows on a `.aes` file:
 | `decrypt` (`-d`)       | Detect, verify, and decrypt to the output.                                  |
 | `verify` (`--verify`)  | Detect and verify the HMACs (decrypt-and-discard); write nothing.           |
 | `inspect` (`-i`)       | Report unauthenticated AES Crypt metadata (version, KDF, extensions).       |
-| `encrypt` (`-e`)       | **Unchanged** — always writes a symcrypt container; never AES Crypt.        |
+| `encrypt` (`-e`)       | **Unchanged** — always writes a paladin container; never AES Crypt.        |
 
 Because the front-ends are thin (DESIGN §2.2), almost all of the work lands in
-`symcrypt-core`; the front-ends only learn that `inspect` can now return a second
+`paladin-core`; the front-ends only learn that `inspect` can now return a second
 kind of metadata and that the default decrypt-output path can strip `.aes`.
 
 **Depends on:** [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md)
@@ -44,10 +44,10 @@ kind of metadata and that the default decrypt-output path can strip `.aes`.
 2. [The AES Crypt file format (what we must read)](#2-the-aes-crypt-file-format-what-we-must-read)
 3. [Design: where the work lives](#3-design-where-the-work-lives)
 4. [Security implications (confirm before implementing)](#4-security-implications-confirm-before-implementing)
-5. [Core changes (`symcrypt-core`)](#5-core-changes-symcrypt-core)
-6. [CLI changes (`symcrypt`)](#6-cli-changes-symcrypt)
-7. [TUI changes (`symcrypt-tui`)](#7-tui-changes-symcrypt-tui)
-8. [GTK changes (`symcrypt-gtk`)](#8-gtk-changes-symcrypt-gtk)
+5. [Core changes (`paladin-core`)](#5-core-changes-paladin-core)
+6. [CLI changes (`paladin`)](#6-cli-changes-paladin)
+7. [TUI changes (`paladin-tui`)](#7-tui-changes-paladin-tui)
+8. [GTK changes (`paladin-gtk`)](#8-gtk-changes-paladin-gtk)
 9. [DESIGN.md updates required](#9-designmd-updates-required)
 10. [Dependencies to add](#10-dependencies-to-add)
 11. [Testing strategy & known-answer vectors](#11-testing-strategy--known-answer-vectors)
@@ -66,21 +66,21 @@ kind of metadata and that the default decrypt-output path can strip `.aes`.
   ([§12](#12-decisions)); a v3 file is rejected as `UnsupportedAesCryptVersion`.
   Version 0 is an optional stretch ([§12](#12-decisions)).
 - **One core, thin front-ends — unchanged.** All format detection, KDF, and
-  HMAC/CBC logic lives in `symcrypt-core`. Front-ends gain no crypto or format
+  HMAC/CBC logic lives in `paladin-core`. Front-ends gain no crypto or format
   knowledge; `decrypt`/`verify` keep the *same signatures* and "just work" on a
   `.aes` file. Only `inspect`'s **return type** widens (it can now describe two
   formats), which the front-ends render.
 - **Honest verification.** Verify HMAC-1 (key block) before producing any
   plaintext and HMAC-2 (body) before the output is finalized; map every failure
-  to the single [`SymError::Auth`] condition, exactly as the symcrypt path does
+  to the single [`SymError::Auth`] condition, exactly as the paladin path does
   (DESIGN §4.4).
 - **Same safety envelope.** Enforce the 64 GiB plaintext cap, bound every
   unauthenticated length before allocation, zeroize all key material.
 
 ### Non-goals
 
-- **No AES Crypt encryption.** `encrypt` is untouched; symcrypt never emits a
-  `.aes` file. (Re-encrypting a decrypted file with symcrypt's own format is the
+- **No AES Crypt encryption.** `encrypt` is untouched; paladin never emits a
+  `.aes` file. (Re-encrypting a decrypted file with paladin's own format is the
   recommended migration — see [§4](#4-security-implications-confirm-before-implementing).)
 - **No password compatibility shims** beyond the documented v1/v2 UTF-16LE
   encoding and v3 UTF-8 password text ([§2.4](#24-key-derivation-the-aes-crypt-kdfs));
@@ -185,7 +185,7 @@ while CPU-DoS stays bounded). Out-of-range values are `MalformedHeader` in
 `decrypt`/`verify`; `inspect` reports the raw value without enforcing the bound
 (it derives no key — §5.8).
 
-> **Password encoding.** symcrypt front-ends capture the password as UTF-8 bytes
+> **Password encoding.** paladin front-ends capture the password as UTF-8 bytes
 > (DESIGN §6.4). For AES Crypt v1/v2 we validate those bytes as UTF-8 text and
 > re-encode the text as **UTF-16LE** per the legacy format. For v3 we use the
 > UTF-8 bytes directly. ASCII passwords interoperate cleanly; non-ASCII passwords
@@ -194,7 +194,7 @@ while CPU-DoS stays bounded). Out-of-range values are `MalformedHeader` in
 > a bug. On the AES Crypt path, a `--password-file` that is not valid UTF-8 is
 > rejected with `InvalidOptions`; UTF-16/BOM AES Crypt key files are out of
 > scope for this implementation. CLI `--password-file` keeps the existing
-> symcrypt behavior: exactly one trailing LF or CRLF is stripped before the core
+> paladin behavior: exactly one trailing LF or CRLF is stripped before the core
 > sees the password bytes, and AES Crypt UTF-8 validation applies after that
 > trim. Byte-exact AES Crypt password files whose intended password ends with a
 > newline are out of scope.
@@ -218,11 +218,11 @@ After armor is stripped (an AES Crypt file is binary and passes
 `armor::auto_dearmor` through untouched), the core peeks the leading bytes and
 dispatches:
 
-- `"SYMCRYPT"` → the existing symcrypt path (`header::parse` + `stream::*`).
+- `"PALADIN"` → the existing paladin path (`header::parse` + `stream::*`).
 - `"AES"` → the new `aescrypt` path; that parser reports
   `UnsupportedAesCryptVersion(version)` when the version byte is not supported.
 - anything else → [`SymError::BadMagic`] (exit 4), with the user-facing message
-  updated to say the input is neither a symcrypt nor AES Crypt file.
+  updated to say the input is neither a paladin nor AES Crypt file.
 
 Detection reads a small fixed prefix (≤ 8 bytes) and re-attaches it with
 `std::io::Read::chain` so the chosen parser sees the full stream. A new private
@@ -231,13 +231,13 @@ call it instead of going straight to `stream`/`header`.
 
 ### 3.2 `inspect` returns a format-tagged enum
 
-`inspect` currently returns a symcrypt-only [`Header`]. It must now describe
+`inspect` currently returns a paladin-only [`Header`]. It must now describe
 *either* format, so its return type becomes a small enum:
 
 ```rust
 /// Unauthenticated metadata for whichever container `inspect` recognized.
 pub enum Metadata {
-    Symcrypt(Header),            // existing struct, unchanged
+    Paladin(Header),            // existing struct, unchanged
     AesCrypt(AesCryptHeader),    // new (version, KDF, extension count, …)
 }
 
@@ -246,7 +246,7 @@ pub fn inspect<R: Read>(input: R) -> Result<Metadata>;
 
 This is the **one breaking change** to the core API. Every `inspect` call site
 renders the result by matching the enum (call sites enumerated in
-[§6](#6-cli-changes-symcrypt)–[§8](#8-gtk-changes-symcrypt-gtk)). `decrypt` and
+[§6](#6-cli-changes-paladin)–[§8](#8-gtk-changes-paladin-gtk)). `decrypt` and
 `verify` keep identical signatures — only their internals dispatch.
 
 ### 3.3 What stays identical
@@ -266,18 +266,18 @@ implementing.**
 
 | # | Implication | Mitigation / how it's handled |
 | - | ----------- | ----------------------------- |
-| 1 | **Legacy KDFs.** v1/v2 use 8192-iteration SHA-256, and v3 uses PBKDF2-HMAC-SHA512 with an unauthenticated iteration count. These are fixed by the file we are reading and are not symcrypt's chosen KDFs. | Read-only. Bound v3 iterations before deriving (§2.4). Docs/help recommend **re-encrypting** decrypted data with symcrypt's own format. No symcrypt file is ever written with these KDFs. |
+| 1 | **Legacy KDFs.** v1/v2 use 8192-iteration SHA-256, and v3 uses PBKDF2-HMAC-SHA512 with an unauthenticated iteration count. These are fixed by the file we are reading and are not paladin's chosen KDFs. | Read-only. Bound v3 iterations before deriving (§2.4). Docs/help recommend **re-encrypting** decrypted data with paladin's own format. No paladin file is ever written with these KDFs. |
 | 2 | **Unauthenticated header.** `magic`, `version`, `reserved`, v3 `kdf_iterations`, and all **extensions** are outside both HMACs. An attacker can flip the version byte, rewrite extensions, or alter the v3 KDF work factor before authentication. This is a property of the foreign format, not fixable on read. | Treat all header/extension data as *unauthenticated even after a successful decrypt*. `inspect` labels it so. We bound and sanitize extensions, bound v3 iterations, and never act on extension contents. |
 | 3 | **Unauthenticated v1/v2 `fsmod`.** The length-mod-16 byte sits outside `hmac2`, so the last block's *visible length* is malleable by up to 15 bytes (the bytes themselves are authentic). | Validate `fsmod < 16` and that it is consistent with the block count (`fsmod == 0` when there are zero body blocks; `fsmod == 0` means 16 final bytes when blocks exist). Document the residual malleability. v3 has no `fsmod`; it uses authenticated ciphertext plus PKCS#7 padding checked after `hmac2`. |
-| 4 | **CBC + late MAC.** `hmac2` covers the body and sits *after* it, so a pure verify-before-output design would need two passes (impossible for stdin). We stream-decrypt while computing `hmac2`, then verify at end. | Plaintext is written to the front-end's **temp file** and only renamed on success; an `Auth` failure discards it (DESIGN §2.2). For `-o -` (stdout) partial plaintext may appear before the check — the *same* caveat symcrypt already documents (DESIGN §11). Verify `hmac2` before applying v3 PKCS#7 padding so there is no padding oracle; never deliver unverified plaintext to a file. |
+| 4 | **CBC + late MAC.** `hmac2` covers the body and sits *after* it, so a pure verify-before-output design would need two passes (impossible for stdin). We stream-decrypt while computing `hmac2`, then verify at end. | Plaintext is written to the front-end's **temp file** and only renamed on success; an `Auth` failure discards it (DESIGN §2.2). For `-o -` (stdout) partial plaintext may appear before the check — the *same* caveat paladin already documents (DESIGN §11). Verify `hmac2` before applying v3 PKCS#7 padding so there is no padding oracle; never deliver unverified plaintext to a file. |
 | 5 | **`hmac1` first.** For v1/v2/v3, a wrong password yields a wrong `key1`, so `hmac1` fails **before any body byte is processed** — wrong-password is caught early (exit 3) with no output. | Verify `hmac1` immediately after KDF, before touching the body. For v3 the `hmac1` input is `enc_keys ‖ 0x03` (§2.2). |
 | 6 | **Constant-time tag checks.** A non-constant-time compare could leak. | Use the RustCrypto `Mac::verify_slice` (constant-time); never compare tags with `==`. |
 | 7 | **Resource bounds on hostile input.** A crafted file could claim huge/streamed extensions, a huge v3 KDF iteration count, or an enormous body. | Cap total extension bytes and count (§5.6); cap v3 iterations (§2.4); enforce the 64 GiB plaintext cap during streaming. |
-| 8 | **No symcrypt-style keyfile component.** AES Crypt key-file workflows are password-source workflows, not a separate format-bound secret like symcrypt's `-k`. Silently ignoring or blending a supplied `-k` would mislead the user. | If a `.aes` file is detected and the `Secret` carries keyfile material (or has no password, e.g. keyfile-only mode), reject with `InvalidOptions` (exit 2). Users who have an AES Crypt key file may pass it as `--password-file` only when it is UTF-8 text; UTF-16/BOM key files are out of scope. |
+| 8 | **No paladin-style keyfile component.** AES Crypt key-file workflows are password-source workflows, not a separate format-bound secret like paladin's `-k`. Silently ignoring or blending a supplied `-k` would mislead the user. | If a `.aes` file is detected and the `Secret` carries keyfile material (or has no password, e.g. keyfile-only mode), reject with `InvalidOptions` (exit 2). Users who have an AES Crypt key file may pass it as `--password-file` only when it is UTF-8 text; UTF-16/BOM key files are out of scope. |
 
 ---
 
-## 5. Core changes (`symcrypt-core`)
+## 5. Core changes (`paladin-core`)
 
 All new code is library code with exhaustive unit + KAT tests (DESIGN §10). TDD:
 write the failing test first, then the implementation.
@@ -285,32 +285,32 @@ write the failing test first, then the implementation.
 ### 5.1 New / changed modules
 
 ```
-crates/symcrypt-core/src/
+crates/paladin-core/src/
 ├── lib.rs        # CHANGED: decrypt/verify/inspect dispatch by format; export Metadata, AesCryptHeader
 ├── format.rs     # NEW: peek leading bytes, return Format + a re-chained Read; the dispatch point
 ├── aescrypt.rs   # NEW: AES Crypt header parse, KDFs, CBC+HMAC verify/decrypt/inspect (the bulk)
 ├── secret.rs     # CHANGED: add pub(crate) password_bytes() accessor (AES Crypt password text validation/encoding)
 ├── paths.rs      # CHANGED: default_decrypt_output strips .aes too; add default_aescrypt_output(input)
 ├── error.rs      # CHANGED: add UnsupportedAesCryptVersion(u8)
-├── header.rs     # unchanged (symcrypt header)
+├── header.rs     # unchanged (paladin header)
 ├── cipher.rs     # unchanged (AEAD); AES Crypt CBC lives in aescrypt.rs
-├── kdf.rs        # unchanged (symcrypt KDFs); AES Crypt KDF lives in aescrypt.rs
+├── kdf.rs        # unchanged (paladin KDFs); AES Crypt KDF lives in aescrypt.rs
 ├── stream.rs     # unchanged
 └── armor.rs      # unchanged
 ```
 
 Keeping AES Crypt's CBC, HMAC, and bespoke KDF in a self-contained `aescrypt.rs`
 mirrors the existing one-concern-per-module layout and avoids entangling the
-audited symcrypt primitives with the legacy format.
+audited paladin primitives with the legacy format.
 
-### 5.2 Error surface (`error.rs` + `symcrypt-common`)
+### 5.2 Error surface (`error.rs` + `paladin-common`)
 
 - Add one variant: `UnsupportedAesCryptVersion(u8)` →
   `#[error("unsupported AES Crypt version: {0:#04x}")]`, mapped to **exit 4** in
-  `symcrypt-common::exit_code` (alongside the other format errors). The enum is
+  `paladin-common::exit_code` (alongside the other format errors). The enum is
   already `#[non_exhaustive]`, so this is additive.
-- Update the existing `BadMagic` display/docs from "not a symcrypt file" to a
-  format-neutral message such as "not a recognized symcrypt or AES Crypt file",
+- Update the existing `BadMagic` display/docs from "not a paladin file" to a
+  format-neutral message such as "not a recognized paladin or AES Crypt file",
   because foreign inputs are now classified after checking both magics.
 - Reuse existing variants everywhere else:
   - bad/short `"AES"` header, nonzero v1/v2/v3 `reserved`, bad extension
@@ -331,7 +331,7 @@ audited symcrypt primitives with the legacy format.
 
 The AES Crypt KDFs need the **raw password bytes** so the AES path can validate
 them as UTF-8 text, re-encode v1/v2 as UTF-16LE, and feed v3 as UTF-8. They must
-also reject keyfiles; the symcrypt `kdf_input()` blend is wrong here. Add:
+also reject keyfiles; the paladin `kdf_input()` blend is wrong here. Add:
 
 ```rust
 impl Secret {
@@ -344,16 +344,16 @@ impl Secret {
 The `aescrypt` decryptor rejects `secret.has_keyfile()` and an empty
 `password_bytes()` with `InvalidOptions` before deriving (implication #8). It
 also rejects `password_bytes()` that are not valid UTF-8, which matters for
-CLI `--password-file` because symcrypt password files are otherwise raw bytes. A
+CLI `--password-file` because paladin password files are otherwise raw bytes. A
 `.aes` file written with a genuinely empty password is therefore unreadable by
-symcrypt — a documented limitation. **Test:** keyfile-bearing, password-less, or
+paladin — a documented limitation. **Test:** keyfile-bearing, password-less, or
 non-UTF-8 password-file `Secret` against a fixture `.aes` returns
 `InvalidOptions`.
 
 ### 5.4 Format detection (`format.rs`)
 
 ```rust
-pub(crate) enum Format { Symcrypt, AesCrypt }
+pub(crate) enum Format { Paladin, AesCrypt }
 
 /// Peek the magic and return the format plus a reader that still yields the
 /// peeked bytes. A complete non-matching prefix is BadMagic; a short input that
@@ -361,8 +361,8 @@ pub(crate) enum Format { Symcrypt, AesCrypt }
 pub(crate) fn detect<R: Read>(input: R) -> Result<(Format, impl Read)>;
 ```
 
-Reads up to 8 bytes, matches `"SYMCRYPT"` vs `"AES"`, and returns
-`prefix.chain(input)`. **Tests:** symcrypt magic, AES magic (including an
+Reads up to 8 bytes, matches `"PALADIN"` vs `"AES"`, and returns
+`prefix.chain(input)`. **Tests:** paladin magic, AES magic (including an
 unsupported AES version routed to the AES parser), short recognized-prefix input,
 and foreign magic each classified correctly; the re-chained reader reproduces
 the original bytes.
@@ -482,10 +482,10 @@ byte-exact block for v2 and v3 fixtures with and without `CREATED_BY`.
 
 - `default_aescrypt_output(input: &Path) -> PathBuf`: strip a trailing `.aes`
   (case-sensitive), else append `.dec`, with the same empty-basename fallback as
-  the symcrypt helper (`.aes` → `.aes.dec`). Supported AES Crypt stream formats
+  the paladin helper (`.aes` → `.aes.dec`). Supported AES Crypt stream formats
   have no authenticated stored filename, so there is no name-from-header branch.
 - **Add `.aes`** to the existing shared `strip_encrypt_suffix` helper (today:
-  `.symcrypt.asc`, `.symcrypt`, `.asc`) so a symcrypt file inadvertently named
+  `.paladin.asc`, `.paladin`, `.asc`) so a paladin file inadvertently named
   `*.aes` also strips sensibly.
 - **Tests:** `secret.aes → secret`, `secret → secret.dec`, `.aes → .aes.dec`,
   non-UTF-8 input → `.dec` appended (mirrors existing `paths.rs` tests).
@@ -515,18 +515,18 @@ byte-exact block for v2 and v3 fixtures with and without `CREATED_BY`.
 
 ---
 
-## 6. CLI changes (`symcrypt`)
+## 6. CLI changes (`paladin`)
 
 The CLI gains **no new flags**; `-d`/`--verify`/`-i` transparently handle `.aes`
 files once the core dispatches. The concrete edits:
 
 | Area | File | Change |
 | ---- | ---- | ------ |
-| Decrypt default output | `crates/symcrypt-cli/src/run.rs` (`run_decrypt`, ~L109–116) | The no-`-o` branch already peeks `core::inspect`. Match the new `Metadata`: `Symcrypt(h)` → `default_decrypt_output(input, &h)` (today's call); `AesCrypt(_)` → `default_aescrypt_output(input)`. |
-| Info rendering | `crates/symcrypt-cli/src/info.rs` (`format_info`) | Take `&Metadata` and branch: existing 12-line symcrypt block, or the §5.8 AES Crypt block. Keep both stable and test byte-exact for v1/v2/v3. |
-| Info dispatch | `crates/symcrypt-cli/src/run.rs` (`run_info`, ~L165) | `core::inspect` now returns `Metadata`; pass it to `info::format_info`. |
-| Friendlier keyfile error | `crates/symcrypt-cli/src/run.rs` / `crates/symcrypt-cli/src/secret.rs` | For non-stdin `decrypt` and `verify`, if `-k` or `--no-password` was supplied, inspect the input before reading the keyfile or prompting; if it is `AesCrypt`, fail early with a clear "AES Crypt files don't use symcrypt keyfiles; use a UTF-8 --password-file for compatible AES Crypt key files" usage message. The decrypt-without-`-o` path reuses the existing metadata peek; decrypt-with-`-o` and verify open/inspect/reopen before secret resolution. Stdin inputs keep the core `InvalidOptions` backstop because pre-inspection would require buffering the stream. |
-| Help / docs | `crates/symcrypt-cli/src/cli.rs` help text, man page, README | Note that `-d`/`--verify`/`-i` auto-detect AES Crypt (`.aes`) files, that encryption always uses symcrypt's format, that AES Crypt key files may be passed as `--password-file` only when they are UTF-8 text, and recommend re-encrypting decrypted data (implication #1). |
+| Decrypt default output | `crates/paladin-cli/src/run.rs` (`run_decrypt`, ~L109–116) | The no-`-o` branch already peeks `core::inspect`. Match the new `Metadata`: `Paladin(h)` → `default_decrypt_output(input, &h)` (today's call); `AesCrypt(_)` → `default_aescrypt_output(input)`. |
+| Info rendering | `crates/paladin-cli/src/info.rs` (`format_info`) | Take `&Metadata` and branch: existing 12-line paladin block, or the §5.8 AES Crypt block. Keep both stable and test byte-exact for v1/v2/v3. |
+| Info dispatch | `crates/paladin-cli/src/run.rs` (`run_info`, ~L165) | `core::inspect` now returns `Metadata`; pass it to `info::format_info`. |
+| Friendlier keyfile error | `crates/paladin-cli/src/run.rs` / `crates/paladin-cli/src/secret.rs` | For non-stdin `decrypt` and `verify`, if `-k` or `--no-password` was supplied, inspect the input before reading the keyfile or prompting; if it is `AesCrypt`, fail early with a clear "AES Crypt files don't use paladin keyfiles; use a UTF-8 --password-file for compatible AES Crypt key files" usage message. The decrypt-without-`-o` path reuses the existing metadata peek; decrypt-with-`-o` and verify open/inspect/reopen before secret resolution. Stdin inputs keep the core `InvalidOptions` backstop because pre-inspection would require buffering the stream. |
+| Help / docs | `crates/paladin-cli/src/cli.rs` help text, man page, README | Note that `-d`/`--verify`/`-i` auto-detect AES Crypt (`.aes`) files, that encryption always uses paladin's format, that AES Crypt key files may be passed as `--password-file` only when they are UTF-8 text, and recommend re-encrypting decrypted data (implication #1). |
 
 **Integration tests** (`tests/cli.rs`, `assert_cmd` + a committed `.aes`
 fixture, §11):
@@ -545,29 +545,29 @@ fixture, §11):
 
 ---
 
-## 7. TUI changes (`symcrypt-tui`)
+## 7. TUI changes (`paladin-tui`)
 
 Decrypt and Verify run through the worker → `core::{decrypt, verify}`
-(`crates/symcrypt-tui/src/worker.rs`, unchanged) and work automatically. Only
+(`crates/paladin-tui/src/worker.rs`, unchanged) and work automatically. Only
 the **Info** path and the **decrypt-output prefill** touch the widened `inspect`
 return type.
 
 | Area | File | Change |
 | ---- | ---- | ------ |
-| Info rendering | `crates/symcrypt-tui/src/info.rs` (`format_info(&Header) -> Vec<String>`) | Change to `format_info(&Metadata)` and branch to symcrypt vs AES Crypt rows (§5.8). |
-| Inline inspect | `crates/symcrypt-tui/src/app.rs` (~L498–503) | `core::inspect(&mut r)` now yields `Metadata`; pass to `format_info`. |
-| Decrypt prefill | `crates/symcrypt-tui/src/app.rs` (`sync_paths`, Decrypt branch ~L720–726) | The branch inspects to prefill the output name; match `Metadata`: `Symcrypt(h)` → `default_decrypt_output`; `AesCrypt(_)` → `default_aescrypt_output`. Update the current `Err(_)` fallback to format-neutral wording such as "not a recognized symcrypt or AES Crypt file; enter the output path"; it now fires only for genuinely unrecognized inputs (a `.aes` file inspects successfully). |
+| Info rendering | `crates/paladin-tui/src/info.rs` (`format_info(&Header) -> Vec<String>`) | Change to `format_info(&Metadata)` and branch to paladin vs AES Crypt rows (§5.8). |
+| Inline inspect | `crates/paladin-tui/src/app.rs` (~L498–503) | `core::inspect(&mut r)` now yields `Metadata`; pass to `format_info`. |
+| Decrypt prefill | `crates/paladin-tui/src/app.rs` (`sync_paths`, Decrypt branch ~L720–726) | The branch inspects to prefill the output name; match `Metadata`: `Paladin(h)` → `default_decrypt_output`; `AesCrypt(_)` → `default_aescrypt_output`. Update the current `Err(_)` fallback to format-neutral wording such as "not a recognized paladin or AES Crypt file; enter the output path"; it now fires only for genuinely unrecognized inputs (a `.aes` file inspects successfully). |
 | Keyfile field | (no code change) | A keyfile + a `.aes` file surfaces the core `InvalidOptions` as the existing error status; document it. Optionally disable the keyfile field once Info reveals an AES Crypt input — a nicety, not required. |
 
 **Tests:** extend the existing `info.rs` unit test so `format_info` renders an
 AES Crypt `Metadata` (build the fixture by inspecting committed `.aes` bytes);
-keep the symcrypt assertions. The `info_mode_inline_inspect_populates_results`
+keep the paladin assertions. The `info_mode_inline_inspect_populates_results`
 app test gets an AES Crypt counterpart. Per DESIGN §10, headless TUI coverage
 stays light and leans on the core tests.
 
 ---
 
-## 8. GTK changes (`symcrypt-gtk`)
+## 8. GTK changes (`paladin-gtk`)
 
 Same shape as the TUI: Decrypt/Verify run as relm4 commands calling
 `core::{decrypt, verify}` and need no change; Info and the decrypt-output prefill
@@ -575,11 +575,11 @@ consume the new `Metadata`.
 
 | Area | File | Change |
 | ---- | ---- | ------ |
-| Info rendering | `crates/symcrypt-gtk/src/info.rs` (`header_rows`/`header_text`, take `&Header`) | Accept `&Metadata` (or add `aescrypt_rows`/`metadata_rows`) and render the §5.8 AES Crypt rows; keep `InfoRow`/order parity with the CLI. |
-| Inspect helpers | `crates/symcrypt-gtk/src/app.rs` (`inspect_path` ~L252, `open_and_inspect` ~L1034) | Return `Result<Metadata, …>` instead of `Result<Header, …>`; update the three call sites (decrypt prefill ~L238–240, info prefill ~L266–267, Run/Info ~L929–930). |
-| Decrypt prefill | `crates/symcrypt-gtk/src/app.rs` (`refresh_output`, ~L238–240) | Match `Metadata`: `Symcrypt(h)` → `default_decrypt_output(&input, &h)`; `AesCrypt(_)` → `default_aescrypt_output(&input)`. |
-| Info text | `crates/symcrypt-gtk/src/app.rs` (~L267, ~L930) | `info::header_text` → `info::metadata_text(&meta)`. |
-| Error messages | `crates/symcrypt-gtk/src/message.rs` | GTK renders `SymError` through its own message mapper, so update `BadMagic` to the format-neutral wording and add an explicit `UnsupportedAesCryptVersion` message/test instead of letting it fall through to the generic future-variant text. |
+| Info rendering | `crates/paladin-gtk/src/info.rs` (`header_rows`/`header_text`, take `&Header`) | Accept `&Metadata` (or add `aescrypt_rows`/`metadata_rows`) and render the §5.8 AES Crypt rows; keep `InfoRow`/order parity with the CLI. |
+| Inspect helpers | `crates/paladin-gtk/src/app.rs` (`inspect_path` ~L252, `open_and_inspect` ~L1034) | Return `Result<Metadata, …>` instead of `Result<Header, …>`; update the three call sites (decrypt prefill ~L238–240, info prefill ~L266–267, Run/Info ~L929–930). |
+| Decrypt prefill | `crates/paladin-gtk/src/app.rs` (`refresh_output`, ~L238–240) | Match `Metadata`: `Paladin(h)` → `default_decrypt_output(&input, &h)`; `AesCrypt(_)` → `default_aescrypt_output(&input)`. |
+| Info text | `crates/paladin-gtk/src/app.rs` (~L267, ~L930) | `info::header_text` → `info::metadata_text(&meta)`. |
+| Error messages | `crates/paladin-gtk/src/message.rs` | GTK renders `SymError` through its own message mapper, so update `BadMagic` to the format-neutral wording and add an explicit `UnsupportedAesCryptVersion` message/test instead of letting it fall through to the generic future-variant text. |
 | Keyfile chooser | (no code change) | Core `InvalidOptions` is surfaced via the existing toast/error dialog; drag-and-drop of a `.aes` file decrypts normally. |
 
 **Tests:** the `info.rs` unit tests (pure, no display) gain AES Crypt cases
@@ -642,8 +642,8 @@ new dev-deps beyond the existing `hex`/`tempfile` for KAT fixtures.
 
 ## 11. Testing strategy & known-answer vectors
 
-Most coverage is in `symcrypt-core` (DESIGN §10). Commit small fixtures under
-`crates/symcrypt-core/tests/` (or `data/`).
+Most coverage is in `paladin-core` (DESIGN §10). Commit small fixtures under
+`crates/paladin-core/tests/` (or `data/`).
 
 **Known-answer vectors (the anchor).** Generate v3 `.aes` fixtures with the
 current reference AES Crypt tool, and generate v2 fixtures with an AES Crypt
@@ -721,7 +721,7 @@ clarifications added 2026-06-08.
 - **`--info` `cipher`/`kdf` labels — confirmed.** AES Crypt always displays
   `cipher: aes-256-cbc`; `kdf` is `aescrypt-sha256` for v1/v2 and
   `pbkdf2-hmac-sha512` for v3, with a separate `kdf_iterations` line. These are
-  display-only strings (not the symcrypt `CipherId`/`KdfId` enums) and won't be
+  display-only strings (not the paladin `CipherId`/`KdfId` enums) and won't be
   accepted by `-c`/`--kdf`.
 - **Friendlier pre-prompt keyfile rejection in the CLI (§6) — included.** For
   non-stdin `decrypt` and `verify`, if `-k` or `--no-password` was supplied,
@@ -750,7 +750,7 @@ clarifications added 2026-06-08.
 Checked items are done for **Stream Format 1 and 2**; sub-parts marked
 *(v3 deferred)* land with Stream Format 3 ([§12](#12-decisions)).
 
-**Core (`symcrypt-core`)**
+**Core (`paladin-core`)**
 - [x] Add `aes`, `cbc`, `hmac` deps (`aes 0.8` / `cbc 0.1` / `hmac 0.13`, no new `digest`/`cipher` generation); pinned in `Cargo.lock`.
 - [x] `error.rs`: add `UnsupportedAesCryptVersion(u8)`; update `BadMagic` display/docs; `common::exit_code` maps the AES version variant to 4 (+ test).
 - [x] `secret.rs`: add `pub(crate) password_bytes()`; reject keyfile/empty-password for AES Crypt.
@@ -764,19 +764,19 @@ Checked items are done for **Stream Format 1 and 2**; sub-parts marked
 - [x] `paths.rs`: `default_aescrypt_output` + `.aes` in the shared suffix set (+ tests).
 - [x] Full KAT + tamper + format + usage + cap tests (§11); `fmt`/`clippy` clean.
 
-**CLI (`symcrypt`)**
+**CLI (`paladin`)**
 - [x] `info.rs`: `format_info(&Metadata)` renders both formats (byte-exact).
 - [x] `run.rs`: `run_info`/`run_decrypt` consume `Metadata`; AES Crypt default output.
 - [x] Pre-prompt keyfile / `--no-password` rejection for non-stdin AES Crypt decrypt/verify (§6).
 - [x] Help/man/README: auto-detect note + UTF-8 AES password-file note + re-encrypt recommendation.
 - [x] `assert_cmd` suite over committed v1/v2 `.aes` fixtures (§6). *(v3 fixtures deferred.)*
 
-**TUI (`symcrypt-tui`)**
+**TUI (`paladin-tui`)**
 - [x] `info.rs`: `format_info(&Metadata)`; AES Crypt rows.
 - [x] `app.rs`: inline-inspect and decrypt prefill consume `Metadata`; decrypt-prefill fallback is format-neutral.
 - [x] Info unit test + inline-inspect app test for AES Crypt v2 fixtures.
 
-**GTK (`symcrypt-gtk`)**
+**GTK (`paladin-gtk`)**
 - [x] `info.rs`: rows/text accept `&Metadata`; AES Crypt rows.
 - [x] `app.rs`: `inspect_path`/`open_and_inspect` return `Metadata`; update 3 call sites; decrypt prefill.
 - [x] `message.rs`: format-neutral `BadMagic`; explicit `UnsupportedAesCryptVersion` message (+ tests).

@@ -12,7 +12,7 @@ module Golden
   PLAINTEXT = File.join(DIR, "plaintext.txt")
   # Fixed password for every golden. Public on purpose: these files exist only to
   # be decrypted by the test, never to protect anything.
-  PASSWORD = "symcrypt golden v1"
+  PASSWORD = "paladin golden v1"
 
   CIPHERS = %w[aes-256-gcm chacha20-poly1305].freeze
   KDFS    = %w[argon2id scrypt pbkdf2].freeze
@@ -40,11 +40,11 @@ module Golden
   # `--info` must report so the test can assert it.
   def self.manifest
     matrix = CIPHERS.product(KDFS).map do |cipher, kdf|
-      entry("#{cipher}.#{kdf}.symcrypt", cipher, kdf)
+      entry("#{cipher}.#{kdf}.paladin", cipher, kdf)
     end
     matrix + [
-      entry("armored.symcrypt.asc", "aes-256-gcm", "argon2id", armored: true),
-      entry("stdin_no_name.symcrypt", "aes-256-gcm", "pbkdf2", from_stdin: true),
+      entry("armored.paladin.asc", "aes-256-gcm", "argon2id", armored: true),
+      entry("stdin_no_name.paladin", "aes-256-gcm", "pbkdf2", from_stdin: true),
     ]
   end
 
@@ -59,6 +59,6 @@ module Golden
 
   # The CLI binary under test (shared resolution with the e2e harness).
   def self.binary
-    ENV["SYMCRYPT_BIN"] || File.expand_path("../../target/debug/symcrypt", __dir__)
+    ENV["PALADIN_BIN"] || File.expand_path("../../target/debug/paladin", __dir__)
   end
 end

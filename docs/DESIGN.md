@@ -1,13 +1,13 @@
-# symcrypt — Design
+# paladin — Design
 
-**Status:** Core libraries (`symcrypt-core`, `symcrypt-common`) implemented and tested; front-end binaries (CLI/TUI/GTK) are scaffold stubs pending build-out.
+**Status:** Core libraries (`paladin-core`, `paladin-common`) implemented and tested; front-end binaries (CLI/TUI/GTK) are scaffold stubs pending build-out.
 **Target stack:** Rust 1.94+, [relm4](https://relm4.org/) (gtk4-rs + libadwaita), [ratatui](https://ratatui.rs/).
 **Last updated:** 2026-05-29
 
-`symcrypt` is a simple, safe symmetric file encryption tool. It ships as three
+`paladin` is a simple, safe symmetric file encryption tool. It ships as three
 **thin front-ends over one shared core library** — a scriptable CLI
-(`symcrypt`), an interactive terminal UI (`symcrypt-tui`), and a GTK desktop app
-(`symcrypt-gtk`, built with relm4) — all built on `symcrypt-core`, which does all
+(`paladin`), an interactive terminal UI (`paladin-tui`), and a GTK desktop app
+(`paladin-gtk`, built with relm4) — all built on `paladin-core`, which does all
 the work. The default cipher is AES-256-GCM. Encrypted files begin with a
 self-describing, authenticated header so they can be identified and decrypted
 without out-of-band parameters (other than the password/keyfile).
@@ -54,7 +54,7 @@ without out-of-band parameters (other than the password/keyfile).
 ### Non-goals (v1)
 
 - Public-key / asymmetric encryption, signing, or key exchange.
-- Hiding *that* a file is a symcrypt file (the magic is intentionally
+- Hiding *that* a file is a paladin file (the magic is intentionally
   identifiable) or hiding the approximate plaintext size.
 - Deniable encryption, hidden volumes, or secure erasure guarantees on modern
   storage (see [§11](#11-security-considerations)).
@@ -65,10 +65,10 @@ without out-of-band parameters (other than the password/keyfile).
 
 ## 2. Architecture
 
-A Cargo **workspace** of five crates: the pure-logic `symcrypt-core`, the three
-thin front-ends (`symcrypt`, `symcrypt-tui`, `symcrypt-gtk`), and
-`symcrypt-common` — a small support crate of terminal glue shared by the CLI and
-TUI. **`symcrypt-core` does all the work**; the front-ends are just views that
+A Cargo **workspace** of five crates: the pure-logic `paladin-core`, the three
+thin front-ends (`paladin`, `paladin-tui`, `paladin-gtk`), and
+`paladin-common` — a small support crate of terminal glue shared by the CLI and
+TUI. **`paladin-core` does all the work**; the front-ends are just views that
 gather input, hand it to the core, and render the result. This keeps the
 security-critical code small, front-end-agnostic, and unit-testable, and
 guarantees the CLI, TUI, and GTK app behave identically because they share the
@@ -77,7 +77,7 @@ same code path.
 ### 2.1 Workspace layout
 
 ```
-symcrypt/
+paladin/
 ├── Cargo.toml                 # workspace manifest
 ├── README.md
 ├── docs/
@@ -88,7 +88,7 @@ symcrypt/
 │   ├── IMPLEMENTATION_PLAN_04_GTK.md
 │   └── IMPLEMENTATION_PLAN_05_AESCRYPT.md  # AES Crypt read interop
 └── crates/
-    ├── symcrypt-core/         # library — ALL crypto, format, streaming, pure helpers
+    ├── paladin-core/         # library — ALL crypto, format, streaming, pure helpers
     │   ├── src/
     │   │   ├── lib.rs          # public API: encrypt / decrypt / inspect / verify
     │   │   ├── error.rs        # SymError, Result
@@ -98,18 +98,18 @@ symcrypt/
     │   │   ├── cipher.rs       # AEAD dispatch (AES-256-GCM, ChaCha20-Poly1305)
     │   │   ├── stream.rs       # STREAM chunked encrypt / decrypt
     │   │   ├── armor.rs        # base64 ASCII-armor wrap / unwrap + detect
-    │   │   ├── format.rs       # peek magic; dispatch symcrypt vs AES Crypt
+    │   │   ├── format.rs       # peek magic; dispatch paladin vs AES Crypt
     │   │   ├── aescrypt.rs     # AES Crypt (.aes) read interop: KDF, CBC+HMAC, inspect
     │   │   └── paths.rs        # default output-path helpers (pure, no I/O)
     │   └── tests/              # round-trip, tamper, KAT vectors
-    ├── symcrypt-common/        # library — terminal glue shared by CLI + TUI
+    ├── paladin-common/        # library — terminal glue shared by CLI + TUI
     │   └── src/lib.rs          # path-or-stdin I/O, clobber check, temp-file finalization,
     │                           #   best-effort remove, password-source resolution, exit-code mapping
-    ├── symcrypt-cli/           # binary `symcrypt`      (thin front-end)
+    ├── paladin-cli/           # binary `paladin`      (thin front-end)
     │   └── src/main.rs
-    ├── symcrypt-tui/           # binary `symcrypt-tui`  (thin front-end, ratatui)
+    ├── paladin-tui/           # binary `paladin-tui`  (thin front-end, ratatui)
     │   └── src/main.rs
-    └── symcrypt-gtk/           # binary `symcrypt-gtk`  (thin front-end, relm4 + libadwaita)
+    └── paladin-gtk/           # binary `paladin-gtk`  (thin front-end, relm4 + libadwaita)
         └── src/main.rs
 ```
 
@@ -119,7 +119,7 @@ Front-ends own only *medium-specific* concerns — capturing input and rendering
 output. Everything else lives in the core, including pure helpers (output-path
 derivation, cipher/KDF name parsing, defaults) so even those are written once.
 
-| Concern                                                   | `symcrypt-core` | Front-ends |
+| Concern                                                   | `paladin-core` | Front-ends |
 |-----------------------------------------------------------|:---------------:|:----------:|
 | AEAD, KDF, RNG, key derivation                            | ✓               |            |
 | File format: header, chunk framing, armor                 | ✓               |            |
@@ -136,10 +136,10 @@ derivation, cipher/KDF name parsing, defaults) so even those are written once.
 The core never reads argv, never prompts, never touches the filesystem on its
 own, never decides whether to overwrite, and never exits the process. It takes
 generic `Read`/`Write` and reports progress through a callback. The terminal glue
-shared by `symcrypt` and `symcrypt-tui` (open-path-or-stdin, clobber check,
+shared by `paladin` and `paladin-tui` (open-path-or-stdin, clobber check,
 temp-file finalization, best-effort remove, password-source resolution,
 exit-code mapping) lives in the
-`symcrypt-common` crate so it is written once. `symcrypt-gtk` does not use it —
+`paladin-common` crate so it is written once. `paladin-gtk` does not use it —
 it relies on the core plus GTK-native file handling.
 
 For file outputs, front-ends write to a sibling temporary file and rename it to
@@ -190,7 +190,7 @@ impl Default for EncryptOptions { /* secure defaults from §12 */ }
 pub struct Progress { pub done: u64, pub total: Option<u64> }
 type OnProgress = dyn FnMut(Progress) -> std::ops::ControlFlow<()>;
 
-/// Parsed symcrypt header metadata. Exposes the §5.2/§5.4 wire fields — cipher,
+/// Parsed paladin header metadata. Exposes the §5.2/§5.4 wire fields — cipher,
 /// kdf, kdf_params, decoded flags (filename-present and the `keyfile_hint`),
 /// chunk_size, salt_len, nonce_prefix_len — plus the stored name and a
 /// `name_status` (absent / present / ignored_unsafe; see §6.2). It carries no
@@ -204,7 +204,7 @@ pub struct AesCryptHeader { /* … */ }
 
 /// What `inspect` recognized. `decrypt`/`verify` keep identical signatures and
 /// dispatch internally; only `inspect` widens to describe two formats (§5.8).
-pub enum Metadata { Symcrypt(Header), AesCrypt(AesCryptHeader) }
+pub enum Metadata { Paladin(Header), AesCrypt(AesCryptHeader) }
 
 // ---- The four operations every front-end calls ----
 
@@ -230,8 +230,8 @@ pub fn default_aescrypt_output(input: &Path) -> PathBuf;   // strips a trailing 
 ```
 
 `decrypt`, `verify`, and `inspect` auto-detect the container format after armor
-is stripped: a symcrypt magic takes the native path, an `AES` magic takes the
-AES Crypt read path (§5.8). Encryption always writes symcrypt's own format.
+is stripped: a paladin magic takes the native path, an `AES` magic takes the
+AES Crypt read path (§5.8). Encryption always writes paladin's own format.
 
 ### 2.4 Data flow
 
@@ -264,7 +264,7 @@ option). Truncation, reordering, and bit-flips of the ciphertext must be detecte
 
 **Out of scope.** A compromised host while the tool runs (malware, keyloggers,
 swap/coredump capture), an attacker who knows the password or keyfile, coercion,
-traffic analysis of file size, and the fact that the file *is* a symcrypt file.
+traffic analysis of file size, and the fact that the file *is* a paladin file.
 Secure deletion of the original plaintext is best-effort only.
 
 ---
@@ -296,7 +296,7 @@ key (32 bytes) = KDF(secret_input, salt, params)
 
 - `salt` is 16 random bytes, fresh per file, stored in the header.
 - `secret_input` is a domain-separated, length-prefixed encoding:
-  `b"symcrypt secret v1\0" || u64be(password_len) || password_bytes ||
+  `b"paladin secret v1\0" || u64be(password_len) || password_bytes ||
   u64be(keyfile_len) || keyfile_bytes`, where `u64be` is an unsigned 64-bit
   big-endian length. This avoids ambiguity between passwords and keyfile
   contents. Each part may be empty, but not both; creating a `Secret` with no
@@ -390,7 +390,7 @@ authenticated via AAD during decrypt/verify.
 
 | Offset            | Size               | Field              | Notes                                             |
 |-------------------|--------------------|--------------------|---------------------------------------------------|
-| 0                 | 8                  | `magic`            | ASCII `"SYMCRYPT"`                                |
+| 0                 | 8                  | `magic`            | ASCII `"PALADIN"` + trailing `0x00` pad           |
 | 8                 | 1                  | `version`          | `0x01`                                            |
 | 9                 | 1                  | `cipher_id`        | `0x01` AES-256-GCM · `0x02` ChaCha20-Poly1305     |
 | 10                | 1                  | `kdf_id`           | `0x01` Argon2id · `0x02` scrypt · `0x03` PBKDF2   |
@@ -512,9 +512,9 @@ bytes (~117 bytes overhead).
 With `--armor`, the binary container is base64-encoded and wrapped:
 
 ```
------BEGIN SYMCRYPT MESSAGE-----
+-----BEGIN PALADIN MESSAGE-----
 <base64, wrapped at 64 columns>
------END SYMCRYPT MESSAGE-----
+-----END PALADIN MESSAGE-----
 ```
 
 Encryption uses standard base64 (RFC 4648 `+`/`/` alphabet, with `=` padding),
@@ -523,7 +523,7 @@ the final line shorter when needed), and emits no extra text before the begin
 marker or after the end marker. The END marker line is
 terminated by a single LF, so the armored output ends with exactly one newline
 and no trailing blank line. Decrypt,
-verify, and info auto-detect armor by the `-----BEGIN SYMCRYPT MESSAGE-----`
+verify, and info auto-detect armor by the `-----BEGIN PALADIN MESSAGE-----`
 line and strip it before parsing the binary header. They accept LF or CRLF line
 endings and surrounding whitespace, but require the exact begin/end marker
 lines once armor is detected. Extra non-whitespace outside the markers,
@@ -535,7 +535,7 @@ not represented in the binary header.
 
 The magic is checked first, then the `version` byte. An unknown `version`,
 `cipher_id`, or `kdf_id`, or any reserved `flags` bit set, is rejected with a
-clear error (exit code 4) — symcrypt never guesses at an unrecognized format.
+clear error (exit code 4) — paladin never guesses at an unrecognized format.
 New ciphers or KDFs take new IDs (with a version bump if the layout changes).
 Because every file stores its own KDF parameters, files remain decryptable as
 the *defaults* for new files evolve over time.
@@ -545,10 +545,10 @@ the *defaults* for new files evolve over time.
 As an interoperability convenience, `decrypt`, `verify`, and `inspect` also read
 foreign [AES Crypt](https://www.aescrypt.com/) (`.aes`) files. Detection is
 automatic: after armor is stripped, a leading `AES` magic takes the AES Crypt
-path and a `SYMCRYPT` magic takes the native path. **Encryption never writes
-AES Crypt** — symcrypt only ever emits its own container (§5.1). This is read
+path and a `PALADIN` magic takes the native path. **Encryption never writes
+AES Crypt** — paladin only ever emits its own container (§5.1). This is read
 interop, not an endorsement of the legacy format; the recommended migration is
-to decrypt a `.aes` file and re-encrypt it with symcrypt.
+to decrypt a `.aes` file and re-encrypt it with paladin.
 
 **Supported versions: Stream Format 1 and 2.** Stream Format 3
 (PBKDF2-HMAC-SHA512) is **not yet implemented** — its PBKDF2 salt is not stated
@@ -576,7 +576,7 @@ input is bounded: extensions are capped (256 KiB total, 1024 count), the body
 streams with bounded memory, and the §4.3 64 GiB plaintext cap applies. A failed
 HMAC, a truncated/appended body, or a ciphertext run that is not a multiple of
 16 are all the single `Auth` condition (§4.4), never distinguished from a wrong
-password. AES Crypt has no symcrypt-style keyfile component, so a keyfile-bearing
+password. AES Crypt has no paladin-style keyfile component, so a keyfile-bearing
 or password-less secret against a `.aes` file is a usage error (§6.6); an AES
 Crypt key file may instead be supplied as a UTF-8 `--password-file` (§6.4).
 
@@ -584,8 +584,8 @@ Crypt key file may instead be supplied as a UTF-8 `--password-file` (§6.4).
 
 ## 6. CLI specification
 
-`symcrypt` is the command-line front-end: a thin wrapper that parses arguments,
-resolves the password, opens streams, calls `symcrypt-core`, and maps results to
+`paladin` is the command-line front-end: a thin wrapper that parses arguments,
+resolves the password, opens streams, calls `paladin-core`, and maps results to
 exit codes. It contains no crypto or format logic. The flags below are also the
 shared vocabulary the TUI and GTK app expose through their own controls where
 applicable — cipher and KDF names, defaults, and output-path rules all come from
@@ -596,7 +596,7 @@ environment variables.
 ### 6.1 Synopsis
 
 ```
-symcrypt (-e|--encrypt | -d|--decrypt | -i|--info | --verify) <FILE> [options]
+paladin (-e|--encrypt | -d|--decrypt | -i|--info | --verify) <FILE> [options]
 ```
 
 Except for `-h/--help` and `-V/--version`, exactly one mode and one `<FILE>` are
@@ -606,15 +606,15 @@ required. `<FILE>` of `-` means **stdin**.
 
 | Mode             | Action                                                            |
 |------------------|-------------------------------------------------------------------|
-| `-e, --encrypt`  | Encrypt `<FILE>` → output. Always symcrypt's own format.          |
-| `-d, --decrypt`  | Decrypt `<FILE>` → output. A symcrypt or AES Crypt (`.aes`) container is auto-detected (§5.8). |
-| `-i, --info`     | Print unauthenticated header metadata without decrypting (symcrypt or AES Crypt). No password needed. |
-| `--verify`       | Stream-decrypt and discard the output (nothing written) to verify integrity + password (symcrypt or AES Crypt). Exit 0 if valid. |
+| `-e, --encrypt`  | Encrypt `<FILE>` → output. Always paladin's own format.          |
+| `-d, --decrypt`  | Decrypt `<FILE>` → output. A paladin or AES Crypt (`.aes`) container is auto-detected (§5.8). |
+| `-i, --info`     | Print unauthenticated header metadata without decrypting (paladin or AES Crypt). No password needed. |
+| `--verify`       | Stream-decrypt and discard the output (nothing written) to verify integrity + password (paladin or AES Crypt). Exit 0 if valid. |
 
 `--info` writes stable UTF-8 `key: value` lines to stdout in this exact order:
 `format`, `version`, `cipher`, `kdf`, `kdf_params`, `flags`, `keyfile_hint`,
 `chunk_size`, `salt_len`, `nonce_prefix_len`, `name_status`, and `name`. Values
-are display forms from the shared core helpers: `format: symcrypt`, decimal
+are display forms from the shared core helpers: `format: paladin`, decimal
 numeric values, lowercase cipher/KDF names, `flags` as two-digit lowercase hex
 (`0x00`), and `keyfile_hint: true|false`. `kdf_params` is
 `memory=<KiB>,time=<N>,parallelism=<N>` for Argon2id, `log_n=<N>,r=<N>,p=<N>`
@@ -698,7 +698,7 @@ setup to keyfile-only.
 remains reserved for the main input stream. Directories, special files, and
 symlinks that resolve to non-regular files are usage errors.
 
-Password bytes are used exactly as provided; symcrypt does no Unicode
+Password bytes are used exactly as provided; paladin does no Unicode
 normalization. Password text obtained from CLI argv, environment-variable
 values, TUI fields, and GTK entries is encoded as UTF-8 bytes; non-UTF-8
 password argv or environment values are usage errors. Path arguments are
@@ -716,7 +716,7 @@ re-encoded UTF-16LE for the v1/v2 KDF), so a `--password-file` whose bytes are
 not valid UTF-8 after the one-newline trim is a usage error (exit 2). This is how
 an AES Crypt key file is supplied — UTF-16/BOM key files, and byte-exact password
 files whose intended password ends in a newline, are out of scope. AES Crypt has
-no symcrypt-style keyfile component, so `-k` (or `--no-password`) against a `.aes`
+no paladin-style keyfile component, so `-k` (or `--no-password`) against a `.aes`
 file is also a usage error; for non-stdin decrypt/verify the CLI detects this and
 fails before prompting, and the core enforces it as a backstop for stdin.
 
@@ -728,19 +728,19 @@ accommodates any resulting length.
 
 ### 6.5 Output defaults
 
-- **Encrypt, no `-o`:** `<input>.symcrypt` (`.symcrypt.asc` if `--armor`).
+- **Encrypt, no `-o`:** `<input>.paladin` (`.paladin.asc` if `--armor`).
 - **Decrypt, no `-o`:** use the stored filename if present and well-formed
   (§5.2); otherwise — no stored name, or one that fails the basename rules —
-  strip `.symcrypt.asc`, then `.symcrypt`, then `.asc`; else append `.dec`. If
+  strip `.paladin.asc`, then `.paladin`, then `.asc`; else append `.dec`. If
   stripping a recognized extension would leave an empty basename (an input named
-  exactly `.symcrypt`, `.asc`, or `.symcrypt.asc`), treat it as having no
+  exactly `.paladin`, `.asc`, or `.paladin.asc`), treat it as having no
   recognizable extension and append `.dec` to the original basename instead
-  (e.g. `.symcrypt` → `.symcrypt.dec`).
+  (e.g. `.paladin` → `.paladin.dec`).
   Stored names are written beside the input file. Refuse to overwrite unless
   `-f`. An **AES Crypt** (`.aes`) file stores no filename, so its default output
   strips a trailing `.aes` (else appends `.dec`, with the same empty-basename
-  fallback: `.aes` → `.aes.dec`); `.aes` is also stripped by the symcrypt path so
-  a symcrypt file misnamed `*.aes` still strips sensibly.
+  fallback: `.aes` → `.aes.dec`); `.aes` is also stripped by the paladin path so
+  a paladin file misnamed `*.aes` still strips sensibly.
 - **Filesystem path inputs/outputs:** when `<FILE>` is not `-`, it must be an
   existing regular file. Directories, special files, and symlinks that resolve
   to non-regular files are usage errors. Output paths may name a new file or an
@@ -781,7 +781,7 @@ accommodates any resulting length.
 | 4    | Unsupported, unknown, or malformed format/header |
 | 130  | Canceled by the user                             |
 
-Errors returned by `symcrypt-core` map directly from its `SymError` variants —
+Errors returned by `paladin-core` map directly from its `SymError` variants —
 the front-end does not reclassify them: `Auth` → 3; `BadMagic` /
 `UnsupportedVersion` / `UnsupportedAesCryptVersion` / `UnknownCipher` /
 `UnknownKdf` / `ReservedFlags` / `MalformedHeader` → 4; `InvalidOptions`
@@ -790,7 +790,7 @@ KDF params, an unsafe stored filename, an out-of-range programmatic `chunk_size`
 or a keyfile-bearing / password-less / non-UTF-8-password secret against a `.aes`
 file) → 2; `Canceled` → 130; `Io`, `InputTooLarge`, and the like → 1;
 argument/usage problems caught before the core is called → 2. The mapping lives
-in `symcrypt-common` and is shared by the CLI and TUI.
+in `paladin-common` and is shared by the CLI and TUI.
 
 For an AES Crypt file (§5.8), `UnsupportedAesCryptVersion` (a stream-format
 version this build does not read, including the not-yet-implemented v3) is exit
@@ -817,23 +817,23 @@ process exits 130.
 ### 6.7 Examples
 
 ```sh
-symcrypt -e report.pdf                      # → report.pdf.symcrypt (prompts for password)
-symcrypt -e report.pdf -o - --armor > out   # armored to stdout
-symcrypt -d report.pdf.symcrypt             # → report.pdf (or prompts/derives name)
-symcrypt -i report.pdf.symcrypt             # show unauthenticated header metadata
-printf 'secret' | PW='passphrase' symcrypt -e - -o s.symcrypt --password-env PW
-symcrypt -e vault.tar -k usb.key --no-password
-symcrypt -e big.iso -c chacha20-poly1305 --remove
+paladin -e report.pdf                      # → report.pdf.paladin (prompts for password)
+paladin -e report.pdf -o - --armor > out   # armored to stdout
+paladin -d report.pdf.paladin             # → report.pdf (or prompts/derives name)
+paladin -i report.pdf.paladin             # show unauthenticated header metadata
+printf 'secret' | PW='passphrase' paladin -e - -o s.paladin --password-env PW
+paladin -e vault.tar -k usb.key --no-password
+paladin -e big.iso -c chacha20-poly1305 --remove
 ```
 
 ---
 
 ## 7. TUI application design
 
-**Binary:** `symcrypt-tui`. **Toolkit:** [ratatui](https://ratatui.rs/) for
+**Binary:** `paladin-tui`. **Toolkit:** [ratatui](https://ratatui.rs/) for
 widgets/layout + [crossterm](https://docs.rs/crossterm) for the terminal backend
 (raw mode, key and resize events). Like the other front-ends it is a thin view
-over `symcrypt-core` (reusing `symcrypt-common` for the terminal glue) and holds
+over `paladin-core` (reusing `paladin-common` for the terminal glue) and holds
 no crypto or format logic — it builds the same `Secret`/`EncryptOptions` and
 calls the same four core functions.
 
@@ -865,7 +865,7 @@ CLI remains the only v1 front-end with stdin/stdout streaming.
 - **Footer** key hints (Tab/Shift-Tab to move, Enter to run, Esc to cancel/quit,
   `?` for help).
 
-Optionally launch with a path (`symcrypt-tui <file>`) to prefill the input
+Optionally launch with a path (`paladin-tui <file>`) to prefill the input
 field.
 
 ### 7.2 Concurrency & cancellation
@@ -887,11 +887,11 @@ raw mode), not `rpassword`, which would conflict with raw mode.
 
 ## 8. GTK application design
 
-**Binary:** `symcrypt-gtk`. **Framework:** [relm4](https://relm4.org/) — an
+**Binary:** `paladin-gtk`. **Framework:** [relm4](https://relm4.org/) — an
 Elm-architecture layer over gtk4-rs — with
 [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/) for modern GNOME
 styling and `relm4-components` for ready-made helpers. Like the CLI and TUI it
-is a thin front-end and links the same `symcrypt-core`; it holds no crypto or
+is a thin front-end and links the same `paladin-core`; it holds no crypto or
 format logic.
 
 ### 8.1 Component model
@@ -974,8 +974,8 @@ in the UI, and password input is captured in its own masked field (not
 `rpassword`).
 
 ² relm4 builds on gtk4-rs and pairs with libadwaita for styling;
-`relm4-components` supplies file-dialog and worker helpers. `symcrypt-common`
-depends only on `symcrypt-core`, the standard library, `thiserror`, and
+`relm4-components` supplies file-dialog and worker helpers. `paladin-common`
+depends only on `paladin-core`, the standard library, `thiserror`, and
 `tempfile`.
 
 Version requirements are selected at scaffolding time via `cargo add` (latest
@@ -1016,7 +1016,7 @@ chosen for being pure-Rust and widely reviewed.
   markers.
 - STREAM nonce derivation: counter increments, final flag placement.
 - Pure helpers: `default_encrypt_output` / `default_decrypt_output` (including
-  the empty-basename fallback, e.g. `.symcrypt` → `.symcrypt.dec`) and
+  the empty-basename fallback, e.g. `.paladin` → `.paladin.dec`) and
   exact lowercase cipher/KDF `FromStr`/`Display` round-trips with alias/case
   rejection.
 
@@ -1045,7 +1045,7 @@ always uses OS randomness.
 
 **AES Crypt read interop (§5.8):** genuine Stream Format 2 `.aes` fixtures are
 minted by the reference `aescrypt` tool (committed under
-`symcrypt-core/tests/data/aescrypt/` with a generator script and the exact tool
+`paladin-core/tests/data/aescrypt/` with a generator script and the exact tool
 version) and a v1 fixture is mechanically derived from a v2 one; round-trip tests
 decrypt them byte-for-byte across plaintext sizes 0, 1, 15, 16, 17, and a few
 KiB, including a non-ASCII (UTF-16LE) password. The v1/v2 KDF is pinned by an
@@ -1063,7 +1063,7 @@ exercised on the AES Crypt path too. CLI `assert_cmd` tests cover decrypt
 tests.
 
 **Front-end tests.** Because the front-ends are thin, most coverage lives in
-core. `symcrypt` gets CLI integration tests (`assert_cmd` + `tempfile`):
+core. `paladin` gets CLI integration tests (`assert_cmd` + `tempfile`):
 default-extension behavior, required `-o` for stdin encrypt/decrypt,
 `--remove` rejection with stdin, `--remove` warning-but-success when deletion
 fails after successful output finalization, output-equals-input refusal, `-o -`
@@ -1080,12 +1080,12 @@ codes including
 130 for cancellation, exact lowercase cipher/KDF parsing, non-UTF-8
 OS-native path handling where the platform supports it, and password bytes via
 file/env/`--no-password`. The
-`symcrypt-common`
+`paladin-common`
 glue (path-or-stdin opening, clobber check, best-effort remove, password-source
 exclusivity/resolution, exit-code mapping, and temp-file finalization) is
-unit-tested directly. `symcrypt-tui` gets light tests of its non-UI glue,
+unit-tested directly. `paladin-tui` gets light tests of its non-UI glue,
 including rejection of `-` for path fields;
-headless GTK testing is limited, so `symcrypt-gtk` relies on manual verification
+headless GTK testing is limited, so `paladin-gtk` relies on manual verification
 plus the shared core/helper tests.
 
 Per repo convention, tests accompany every code change.
@@ -1102,7 +1102,7 @@ Per repo convention, tests accompany every code change.
   delete and the help says so plainly — we will not pretend to "shred."
 - **Filenames/sizes can be sensitive.** Storing the original filename is opt-in
   (`--name`) and stores only a well-formed basename. Approximate plaintext size
-  always leaks from ciphertext length; symcrypt does not pad. v1 refuses to
+  always leaks from ciphertext length; paladin does not pad. v1 refuses to
   encrypt, decrypt, or verify plaintext larger than 64 GiB. (Padding is a
   possible future option.)
 - **Wrong password vs. corruption** are indistinguishable by design and reported
@@ -1139,8 +1139,8 @@ Per repo convention, tests accompany every code change.
   body byte (a wrong password fails early with no output), `hmac2` is verified
   before the final block is `fsmod`-truncated (no padding oracle), tags are
   compared in constant time, and extension count/size, the v3 iteration count
-  (when v3 lands), and body size are bounded against hostile input. symcrypt
-  never *writes* this format; re-encrypting decrypted data with symcrypt's own
+  (when v3 lands), and body size are bounded against hostile input. paladin
+  never *writes* this format; re-encrypting decrypted data with paladin's own
   authenticated format is the recommended migration.
 
 Per repo policy, these implications are flagged for confirmation before
@@ -1165,13 +1165,13 @@ implementation begins, and tests in §10 verify each integrity property.
 | Plaintext size cap   | 64 GiB                          |
 | Key length           | 32 bytes (256-bit)              |
 | Tag length           | 16 bytes (128-bit)              |
-| Output extension     | `.symcrypt` (`.symcrypt.asc` armored) |
+| Output extension     | `.paladin` (`.paladin.asc` armored) |
 
 ---
 
 ## 13. Out of scope for v1
 
-**AES Crypt encryption** (symcrypt reads `.aes` files but never writes them —
+**AES Crypt encryption** (paladin reads `.aes` files but never writes them —
 §5.8) and **AES Crypt Stream Format 3** (deferred until its PBKDF2 salt can be
 pinned from a real v3 fixture; a v3 file is rejected as
 `UnsupportedAesCryptVersion` until then). Also: asymmetric crypto, compression,
@@ -1194,7 +1194,7 @@ All open questions are now settled:
 - [x] **Argon2id parallelism default.** Keep **1 lane** (deterministic and
       portable; §12).
 - [x] **`--info` and `--verify` in v1.** Yes — both ship in v1 (§6.2).
-- [x] **Shared terminal glue.** Use a dedicated **`symcrypt-common`** crate for
+- [x] **Shared terminal glue.** Use a dedicated **`paladin-common`** crate for
       the CLI+TUI glue (§2) so nothing is reimplemented.
 - [x] **TUI file selection.** Plain **path entry** for v1; a built-in
       file-browser popup is a post-v1 enhancement (§7.1).
@@ -1237,7 +1237,7 @@ and will be expanded once this design stabilizes.
 
 | Plan file                          | Covers                                                       |
 | ---------------------------------- | ------------------------------------------------------------ |
-| `IMPLEMENTATION_PLAN_01_CORE.md`   | Workspace scaffold, `symcrypt-core`, and `symcrypt-common`.  |
-| `IMPLEMENTATION_PLAN_02_CLI.md`    | `symcrypt` command-line front-end.                           |
-| `IMPLEMENTATION_PLAN_03_TUI.md`    | `symcrypt-tui` terminal front-end.                           |
-| `IMPLEMENTATION_PLAN_04_GTK.md`    | `symcrypt-gtk` relm4/libadwaita desktop front-end.           |
+| `IMPLEMENTATION_PLAN_01_CORE.md`   | Workspace scaffold, `paladin-core`, and `paladin-common`.  |
+| `IMPLEMENTATION_PLAN_02_CLI.md`    | `paladin` command-line front-end.                           |
+| `IMPLEMENTATION_PLAN_03_TUI.md`    | `paladin-tui` terminal front-end.                           |
+| `IMPLEMENTATION_PLAN_04_GTK.md`    | `paladin-gtk` relm4/libadwaita desktop front-end.           |

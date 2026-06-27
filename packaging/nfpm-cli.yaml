@@ -1,4 +1,4 @@
-# nfpm config — symcrypt CLI package (.deb / .rpm).
+# nfpm config — paladin CLI package (.deb / .rpm).
 #
 # Built via `make package` (or package-deb / package-rpm), which exports the
 # VERSION and ARCH variables referenced below. To run nfpm by hand, set them
@@ -6,7 +6,7 @@
 #   VERSION=0.1.0 ARCH=amd64 nfpm package -f packaging/nfpm-cli.yaml -p deb -t dist
 #
 # nfpm reference: https://nfpm.goreleaser.com
-name: symcrypt
+name: paladin
 arch: ${ARCH}
 platform: linux
 version: ${VERSION}
@@ -15,24 +15,24 @@ section: utils
 priority: optional
 maintainer: "Benjamin Porter <FreedomBen@users.noreply.github.com>"
 vendor: "Benjamin Porter"
-homepage: "https://github.com/benjaminporter/symcrypt"
+homepage: "https://github.com/benjaminporter/paladin"
 license: "MIT OR Apache-2.0"
 description: |
   Simple, safe symmetric file encryption (command-line interface).
 
-  symcrypt encrypts files with AES-256-GCM (or ChaCha20-Poly1305) and an
+  paladin encrypts files with AES-256-GCM (or ChaCha20-Poly1305) and an
   Argon2id-derived key. Encrypted files begin with a self-describing,
   authenticated header, so they decrypt with only the password or keyfile —
-  no out-of-band parameters. This package installs the `symcrypt` command
+  no out-of-band parameters. This package installs the `paladin` command
   and its man page.
 
 contents:
-  - src: ./target/release/symcrypt
-    dst: /usr/bin/symcrypt
+  - src: ./target/release/paladin
+    dst: /usr/bin/paladin
     file_info:
       mode: 0755
-  - src: ./crates/symcrypt-cli/symcrypt.1
-    dst: /usr/share/man/man1/symcrypt.1
+  - src: ./crates/paladin-cli/paladin.1
+    dst: /usr/share/man/man1/paladin.1
     file_info:
       mode: 0644
 

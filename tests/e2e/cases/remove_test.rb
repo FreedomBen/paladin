@@ -10,9 +10,9 @@ require "test_helper"
 class RemoveTest < E2ETest
   # After a successful encrypt, `--remove` deletes the input; the output remains.
   def test_remove_after_successful_encrypt
-    src    = write_input("doc.txt", File.binread(Symcrypt::LOREM))
-    cipher = tmp("doc.symcrypt")
-    enc = symcrypt("-e", src, "-o", cipher, "--remove", *FAST_KDF,
+    src    = write_input("doc.txt", File.binread(Paladin::LOREM))
+    cipher = tmp("doc.paladin")
+    enc = paladin("-e", src, "-o", cipher, "--remove", *FAST_KDF,
                    "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
     assert_status enc, 0
     refute File.exist?(src), "input should be removed after a successful encrypt"
@@ -21,22 +21,22 @@ class RemoveTest < E2ETest
 
   # After a successful decrypt, `--remove` deletes the (container) input.
   def test_remove_after_successful_decrypt
-    cipher = tmp("doc.symcrypt")
-    symcrypt("-e", Symcrypt::LOREM, "-o", cipher, *FAST_KDF,
+    cipher = tmp("doc.paladin")
+    paladin("-e", Paladin::LOREM, "-o", cipher, *FAST_KDF,
              "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
     out = tmp("doc.out")
-    dec = symcrypt("-d", cipher, "-o", out, "--remove",
+    dec = paladin("-d", cipher, "-o", out, "--remove",
                    "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
     assert_status dec, 0
     refute File.exist?(cipher), "container should be removed after a successful decrypt"
-    assert_identical Symcrypt::LOREM, out
+    assert_identical Paladin::LOREM, out
   end
 
   # On an auth failure the input is preserved (nothing was finalized).
   def test_remove_preserves_input_on_auth_failure
-    cipher = tmp("doc.symcrypt")
-    symcrypt("-e", Symcrypt::LOREM, "-o", cipher, *FAST_KDF, "-p", "right-secret")
-    res = symcrypt("-d", cipher, "-o", tmp("o"), "--remove", "-p", "wrong-secret")
+    cipher = tmp("doc.paladin")
+    paladin("-e", Paladin::LOREM, "-o", cipher, *FAST_KDF, "-p", "right-secret")
+    res = paladin("-d", cipher, "-o", tmp("o"), "--remove", "-p", "wrong-secret")
     assert_failure res, 3, "authentication failed"
     assert File.file?(cipher), "a failed decrypt must not remove the input"
   end
@@ -45,8 +45,8 @@ class RemoveTest < E2ETest
   # ran, so there is nothing to clean up after.
   def test_remove_preserves_input_on_refuse_to_overwrite
     src      = write_input("doc.txt", "fresh content\n")
-    existing = write_input("out.symcrypt", "do not clobber me\n")
-    res = symcrypt("-e", src, "-o", existing, "--remove", *FAST_KDF,
+    existing = write_input("out.paladin", "do not clobber me\n")
+    res = paladin("-e", src, "-o", existing, "--remove", *FAST_KDF,
                    "--password-env", "PW", env: { "PW" => DEFAULT_PASSWORD })
     assert_failure res, 2, "already exists"
     assert File.exist?(src), "a refused encrypt must not remove the input"
@@ -56,7 +56,7 @@ class RemoveTest < E2ETest
   # `--remove` cannot be combined with stdin input: there is no file to remove,
   # so it is a usage error (exit 2) — not a silent no-op.
   def test_remove_with_stdin_is_usage_error
-    res = symcrypt("-e", "-", "-o", tmp("o.symcrypt"), "--remove", *FAST_KDF,
+    res = paladin("-e", "-", "-o", tmp("o.paladin"), "--remove", *FAST_KDF,
                    "--password-env", "PW", stdin: "x", env: { "PW" => DEFAULT_PASSWORD })
     assert_failure res, 2, "stdin"
   end

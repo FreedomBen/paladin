@@ -1,17 +1,17 @@
-# symcrypt — Implementation plan 04: GTK (`symcrypt-gtk`)
+# paladin — Implementation plan 04: GTK (`paladin-gtk`)
 
 **Status:** Expanded. [DESIGN.md](DESIGN.md) §8 is the source of truth for the
 GTK front-end; this plan turns it into ordered, trackable steps. If a step here
 conflicts with DESIGN.md, update DESIGN.md first so design and plan stay in sync.
 
-**Scope.** The `symcrypt-gtk` binary — a [relm4](https://relm4.org/)
-(gtk4-rs + libadwaita) desktop front-end over `symcrypt-core` (DESIGN §8). It is
+**Scope.** The `paladin-gtk` binary — a [relm4](https://relm4.org/)
+(gtk4-rs + libadwaita) desktop front-end over `paladin-core` (DESIGN §8). It is
 a thin view: it gathers input through widgets, builds a `Secret` and
 `EncryptOptions`, calls the four core operations, and renders progress and
 results. It holds **no** crypto or format logic.
 
 **Depends on:** [`IMPLEMENTATION_PLAN_01_CORE.md`](IMPLEMENTATION_PLAN_01_CORE.md)
-— `symcrypt-core` only. Note: `symcrypt-gtk` does **not** use `symcrypt-common`;
+— `paladin-core` only. Note: `paladin-gtk` does **not** use `paladin-common`;
 it relies on the core plus GTK-native file handling and a small, unit-tested glue
 module of its own (DESIGN §2.2, §8). Terminal-only concerns — stdin/stdout
 streaming, `rpassword`, `--password-file`/`--password-env`, exit codes — do not
@@ -24,7 +24,7 @@ apply to the GUI and are intentionally absent.
 
 ## 1. Core API this front-end consumes
 
-Everything below is already implemented in `symcrypt-core` (plan 01). The GTK app
+Everything below is already implemented in `paladin-core` (plan 01). The GTK app
 only calls these — it never re-derives behavior:
 
 | Item | Use in GTK |
@@ -47,7 +47,7 @@ vocabulary.
 ## 2. Crate layout
 
 Keep medium-independent logic out of the `view!`/`update` wiring so it is
-unit-testable without a display (DESIGN §10). Proposed `crates/symcrypt-gtk/src/`:
+unit-testable without a display (DESIGN §10). Proposed `crates/paladin-gtk/src/`:
 
 | File | Responsibility | Tested |
 | --- | --- | --- |
@@ -61,13 +61,13 @@ unit-testable without a display (DESIGN §10). Proposed `crates/symcrypt-gtk/src
 | `info.rs` | Format a `Header` into display rows (same fields/order as CLI `--info`, DESIGN §6.2). | unit |
 
 `fsio.rs` deliberately re-implements the finalize/same-file/keyfile logic that
-`symcrypt-common` provides for the terminal front-ends, because GTK does not
+`paladin-common` provides for the terminal front-ends, because GTK does not
 depend on `common` (DESIGN §2.2). The duplication is small, kept pure, and
 covered by its own tests.
 
 ## 3. Dependencies to add
 
-Per DESIGN §9, add to `crates/symcrypt-gtk/Cargo.toml` (pin via `cargo add` at
+Per DESIGN §9, add to `crates/paladin-gtk/Cargo.toml` (pin via `cargo add` at
 implementation time, latest compatible; `Cargo.lock` records the resolved
 versions):
 
@@ -158,7 +158,7 @@ code (repo convention). After each step run `cargo fmt`, then
 
 1. **Scaffold + window.** Add deps (§3); replace the `main.rs` stub with an
    `adw::Application` that opens an empty `adw::ApplicationWindow`. Confirm
-   `cargo run -p symcrypt-gtk` shows a window on a GTK4/libadwaita host.
+   `cargo run -p paladin-gtk` shows a window on a GTK4/libadwaita host.
 2. **Non-UI glue (tested first).** Implement and unit-test `mode.rs`,
    `message.rs`, `info.rs`, `options.rs`, then `fsio.rs` (with `tempfile`):
    regular-file/same-file checks, `0600` temp finalization + atomic rename,
@@ -188,7 +188,7 @@ code (repo convention). After each step run `cargo fmt`, then
    password, no output row). Verify runs `verify` on the worker and toasts
    pass/fail.
 9. **Polish.** Keyboard/focus order, sensible default focus, disable `Run`
-   while running, `adw` styling, app id (e.g. `org.symcrypt.Gtk`), window icon.
+   while running, `adw` styling, app id (e.g. `org.paladin.Gtk`), window icon.
 10. **Docs + packaging** (§9).
 
 ## 8. Testing strategy (DESIGN §10)
@@ -213,12 +213,12 @@ and test it; verify the UI by hand.**
 
 ## 9. Docs & packaging
 
-- `data/org.symcrypt.Gtk.desktop` — `Name=symcrypt`, `Exec=symcrypt-gtk`,
-  `Icon=org.symcrypt.Gtk`, `Categories=Utility;Security;`, `Terminal=false`.
+- `data/org.paladin.Gtk.desktop` — `Name=paladin`, `Exec=paladin-gtk`,
+  `Icon=org.paladin.Gtk`, `Categories=Utility;Security;`, `Terminal=false`.
   (Optional, recommended: an AppStream `metainfo.xml` and an SVG icon.)
 - Build/run notes: requires GTK4 + libadwaita **dev** libraries; document the
   package names for at least Fedora and Debian/Ubuntu; `cargo run -p
-  symcrypt-gtk` for development. Note Flatpak as a future packaging path.
+  paladin-gtk` for development. Note Flatpak as a future packaging path.
 - Update `README.md` (and `CLAUDE.md` only if a documented command changes) to
   mark the GTK front-end as implemented and link this plan.
 
@@ -227,7 +227,7 @@ and test it; verify the UI by hand.**
 ## Checklist
 
 - [x] Add GTK deps (relm4, relm4-components, libadwaita, gtk4, anyhow, tempfile, zeroize); note `zeroize` in DESIGN §9.
-- [x] Scaffold `adw::Application` + empty window; `cargo run -p symcrypt-gtk` opens it.
+- [x] Scaffold `adw::Application` + empty window; `cargo run -p paladin-gtk` opens it.
 - [x] `mode.rs`: `Mode` enum + per-mode field visibility (+ unit tests).
 - [x] `message.rs`: `SymError` → user-facing text, incl. `Auth` single condition (+ tests).
 - [x] `info.rs`: `Header` → display rows matching CLI `--info` fields/order (+ tests).
@@ -241,7 +241,7 @@ and test it; verify the UI by hand.**
 - [x] Overwrite approval wired to finalization (GTK `-f` equivalent).
 - [x] Info mode (inspect, no password) and Verify mode (worker, pass/fail toast).
 - [x] Polish: focus order, disable Run while running, app id, icon, styling.
-- [x] Automated tests green (`cargo test -p symcrypt-gtk`); `cargo fmt` + `cargo clippy` clean.
+- [x] Automated tests green (`cargo test -p paladin-gtk`); `cargo fmt` + `cargo clippy` clean.
 - [ ] Manual UI verification checklist completed. (Pending manual verification on a graphical session — this environment is headless.)
 - [x] Docs: `.desktop` file, GTK build/run notes, README/CLAUDE updates.
-- [x] Packaging: `cargo install`/build notes for `symcrypt-gtk`.
+- [x] Packaging: `cargo install`/build notes for `paladin-gtk`.

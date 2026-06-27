@@ -1,4 +1,4 @@
-symcrypt golden plaintext v1
+paladin golden plaintext v1
 
 This small, fixed file is the plaintext behind every ciphertext in
 tests/fixtures/golden/. Decrypting any golden with the documented golden
