@@ -38,7 +38,7 @@ only calls these — it never re-derives behavior:
 | `EncryptOptions` · `CipherId` · `KdfId` · `KdfParams::default_for(kdf)` | Build encrypt options from the Advanced controls. |
 | `Progress { done, total }` · `OnProgress` (`-> ControlFlow<()>`) | Stream progress; `Break` cancels. |
 | `Header` (`version`, `cipher`, `kdf`, `kdf_params`, `flags`, `keyfile_hint`, `chunk_size`, `salt_len`, `nonce_prefix_len`, `name`, `name_status`) · `NameStatus` | Render Info mode. |
-| `SymError` (`Auth`, `BadMagic`, `UnsupportedVersion`, `UnknownCipher`, `UnknownKdf`, `ReservedFlags`, `MalformedHeader`, `InvalidOptions`, `InputTooLarge`, `Canceled`, `Io`) | Map to user-facing toast/dialog text. |
+| `PalError` (`Auth`, `BadMagic`, `UnsupportedVersion`, `UnknownCipher`, `UnknownKdf`, `ReservedFlags`, `MalformedHeader`, `InvalidOptions`, `InputTooLarge`, `Canceled`, `Io`) | Map to user-facing toast/dialog text. |
 
 `CipherId`/`KdfId` provide `FromStr`/`Display` (exact lowercase
 names, no aliases) so the Advanced selectors and Info display reuse the shared
@@ -57,7 +57,7 @@ unit-testable without a display (DESIGN §10). Proposed `crates/paladin-gtk/src/
 | `options.rs` | Build `EncryptOptions` + secret material from model state; confirm-match; cipher/KDF/knob assembly; `--name` basename derivation. | unit |
 | `fsio.rs` | GTK-native file glue: regular-file check, same-file/self-overwrite check, sibling temp-file finalization (mode `0600` on Unix), best-effort remove, keyfile read (1 B..=1 MiB). | unit + temp-dir |
 | `task.rs` | Off-thread crypto runner: orchestrate open → temp output → core call → commit/rollback; owns the cancel flag and progress throttling. | temp-dir |
-| `message.rs` | `SymError` → user-facing string; the `Auth` single-condition message (DESIGN §4.4). | unit |
+| `message.rs` | `PalError` → user-facing string; the `Auth` single-condition message (DESIGN §4.4). | unit |
 | `info.rs` | Format a `Header` into display rows (same fields/order as CLI `--info`, DESIGN §6.2). | unit |
 
 `fsio.rs` deliberately re-implements the finalize/same-file/keyfile logic that
@@ -105,7 +105,7 @@ equivalent); Advanced state (`cipher`, `kdf`, per-KDF cost knobs, `name: bool`,
 `Run`, `Cancel`. Handled in `update`, which mutates the model and re-renders.
 
 **Commands** (`CommandOutput`): `Progress(Progress)` and `Finished(Result<(),
-SymError>)`. The crypto runs as a relm4 **command** (`sender.command(...)` driving
+PalError>)`. The crypto runs as a relm4 **command** (`sender.command(...)` driving
 `relm4::spawn_blocking`), streaming `Progress` and a final `Finished`, applied in
 `update_cmd`. `Info`/`Verify` produce no output file.
 
@@ -114,7 +114,7 @@ SymError>)`. The crypto runs as a relm4 **command** (`sender.command(...)` drivi
 `on_progress` closure (a) reads the shared `Arc<AtomicBool>` cancel flag and
 returns `ControlFlow::Break` when set, and (b) sends a throttled `Progress`
 (emit only when the percentage bucket changes, to avoid flooding the channel at
-64 KiB/chunk). `Cancel` flips the flag; the core returns `SymError::Canceled`;
+64 KiB/chunk). `Cancel` flips the flag; the core returns `PalError::Canceled`;
 `task.rs` removes any temp output; `update_cmd` shows a **non-error** canceled
 state. A KDF call already in flight may finish before the flag is observed.
 `Info`'s `inspect` only reads the bounded header, so it can run inline.
@@ -132,7 +132,7 @@ state. A KDF call already in flight may finish before the flag is observed.
 | password prompt (+ confirm on encrypt) | `adw::PasswordEntryRow` (+ confirm row in Encrypt); confirm must match; empty entry rejected unless keyfile-only. `--password-file`/`--password-env` are CLI-only. |
 | stdin/stdout (`-`) | Not supported; path fields are filesystem-only and reject a literal `-` (DESIGN §7.1 note, §14). |
 | output defaults / same-file refusal / regular-file checks | `fsio`: prefill from `default_*_output`; reject non-regular input/keyfile; refuse output == input by symlink + hardlink identity, else canonical path (DESIGN §6.5). |
-| exit codes | N/A for a GUI; `SymError` maps to toast/dialog text via `message.rs` (Auth ⇒ the single "wrong password or corrupted/tampered file"). |
+| exit codes | N/A for a GUI; `PalError` maps to toast/dialog text via `message.rs` (Auth ⇒ the single "wrong password or corrupted/tampered file"). |
 
 ## 6. Widgets (DESIGN §8.2)
 
@@ -163,7 +163,7 @@ code (repo convention). After each step run `cargo fmt`, then
    `message.rs`, `info.rs`, `options.rs`, then `fsio.rs` (with `tempfile`):
    regular-file/same-file checks, `0600` temp finalization + atomic rename,
    best-effort remove, keyfile size caps, confirm-match, basename derivation,
-   `SymError`→message mapping, `Header`→rows.
+   `PalError`→message mapping, `Header`→rows.
 3. **Component skeleton.** Define `AppModel`/`AppInput`/`CommandOutput` and a
    `view!` with the `ViewStack` modes and per-mode visibility (`mode.rs`). No
    crypto yet — wire `SetMode` and field show/hide only.
@@ -181,7 +181,7 @@ code (repo convention). After each step run `cargo fmt`, then
    throttled `Progress`; on success commit the temp file, optionally
    remove-input, and toast success.
 7. **Cancellation + errors.** `Cancel` flips the cancel flag; render the
-   non-error canceled state and remove temp output. Map every `SymError` via
+   non-error canceled state and remove temp output. Map every `PalError` via
    `message.rs` to a toast or error dialog; `Auth` shows the single combined
    condition.
 8. **Info + Verify.** Info renders `inspect` output through `info.rs` (no
@@ -199,7 +199,7 @@ and test it; verify the UI by hand.**
 - **Automated (no display):** `mode.rs` visibility rules; `options.rs` option
   assembly + confirm-match + basename derivation; `fsio.rs` finalization
   (including Unix `0600`), same-file/self-overwrite refusal, keyfile caps;
-  `message.rs` mapping for every `SymError` variant; `info.rs` field/order
+  `message.rs` mapping for every `PalError` variant; `info.rs` field/order
   parity with CLI `--info`; `task.rs` encrypt→decrypt round-trip and
   cancel-removes-temp via temp dirs. These run in normal `cargo test`.
 - **Shared core tests** already cover crypto/format correctness — GTK does not
@@ -229,7 +229,7 @@ and test it; verify the UI by hand.**
 - [x] Add GTK deps (relm4, relm4-components, libadwaita, gtk4, anyhow, tempfile, zeroize); note `zeroize` in DESIGN §9.
 - [x] Scaffold `adw::Application` + empty window; `cargo run -p paladin-gtk` opens it.
 - [x] `mode.rs`: `Mode` enum + per-mode field visibility (+ unit tests).
-- [x] `message.rs`: `SymError` → user-facing text, incl. `Auth` single condition (+ tests).
+- [x] `message.rs`: `PalError` → user-facing text, incl. `Auth` single condition (+ tests).
 - [x] `info.rs`: `Header` → display rows matching CLI `--info` fields/order (+ tests).
 - [x] `options.rs`: build `EncryptOptions`/secret material, confirm-match, `--name` basename (+ tests).
 - [x] `fsio.rs`: regular-file/same-file checks, `0600` temp finalization, best-effort remove, keyfile caps (+ temp-dir tests).

@@ -16,7 +16,7 @@ use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use paladin_core::{decrypt, encrypt, verify, EncryptOptions, Progress, Secret, SymError};
+use paladin_core::{decrypt, encrypt, verify, EncryptOptions, PalError, Progress, Secret};
 
 use crate::fsio::{self, FsError};
 use crate::mode::Mode;
@@ -101,7 +101,7 @@ pub enum RunError {
     /// A filesystem/glue error (missing input, same-file, output-exists, …).
     Fs(FsError),
     /// A core crypto error (`Auth`, `Canceled`, unsupported format, …).
-    Core(SymError),
+    Core(PalError),
 }
 
 impl fmt::Display for RunError {
@@ -128,8 +128,8 @@ impl From<FsError> for RunError {
     }
 }
 
-impl From<SymError> for RunError {
-    fn from(e: SymError) -> Self {
+impl From<PalError> for RunError {
+    fn from(e: PalError) -> Self {
         RunError::Core(e)
     }
 }
@@ -144,7 +144,7 @@ impl From<SymError> for RunError {
 /// output is dropped (its temp removed), leaving no partial file.
 ///
 /// `cancel` is observed cooperatively: when set, the next progress report
-/// returns [`ControlFlow::Break`], which the core maps to [`SymError::Canceled`].
+/// returns [`ControlFlow::Break`], which the core maps to [`PalError::Canceled`].
 /// Because the core reports progress once immediately after key derivation
 /// (before writing output), a pre-set flag cancels even tiny inputs without
 /// producing output.
@@ -208,7 +208,7 @@ pub fn run_job<P: FnMut(Progress)>(
             // Info runs inline via `inspect` and is excluded by
             // `Mode::runs_on_worker`; it should never reach the worker runner.
             debug_assert!(false, "Info is never a worker Job");
-            return Err(RunError::Core(SymError::Canceled));
+            return Err(RunError::Core(PalError::Canceled));
         }
     }
 
@@ -411,15 +411,15 @@ mod tests {
     fn run_error_display_delegates() {
         let fs = RunError::Fs(FsError::SameFileAsInput);
         assert_eq!(fs.to_string(), FsError::SameFileAsInput.to_string());
-        let core = RunError::Core(SymError::Auth);
-        assert_eq!(core.to_string(), SymError::Auth.to_string());
+        let core = RunError::Core(PalError::Auth);
+        assert_eq!(core.to_string(), PalError::Auth.to_string());
     }
 
     #[test]
     fn run_error_from_conversions() {
         let fs: RunError = FsError::SameFileAsInput.into();
         assert!(matches!(fs, RunError::Fs(_)));
-        let core: RunError = SymError::Canceled.into();
+        let core: RunError = PalError::Canceled.into();
         assert!(matches!(core, RunError::Core(_)));
     }
 
@@ -504,7 +504,7 @@ mod tests {
             &cancel,
             noop,
         );
-        assert!(matches!(res, Err(RunError::Core(SymError::Auth))));
+        assert!(matches!(res, Err(RunError::Core(PalError::Auth))));
         assert!(!recovered.exists(), "no output on auth failure");
     }
 
@@ -541,7 +541,7 @@ mod tests {
         };
         assert!(matches!(
             run_job(job, &cancel, noop),
-            Err(RunError::Core(SymError::Auth))
+            Err(RunError::Core(PalError::Auth))
         ));
     }
 
@@ -560,7 +560,7 @@ mod tests {
 
         let cancel = AtomicBool::new(true); // pre-set
         let res = run_job(encrypt_job(input.clone(), output.clone()), &cancel, noop);
-        assert!(matches!(res, Err(RunError::Core(SymError::Canceled))));
+        assert!(matches!(res, Err(RunError::Core(PalError::Canceled))));
         assert!(!output.exists(), "canceled run must leave no output");
     }
 
@@ -577,7 +577,7 @@ mod tests {
         let res = run_job(encrypt_job(input.clone(), output.clone()), &cancel, |_p| {
             cancel.store(true, Ordering::Relaxed)
         });
-        assert!(matches!(res, Err(RunError::Core(SymError::Canceled))));
+        assert!(matches!(res, Err(RunError::Core(PalError::Canceled))));
         assert!(!output.exists(), "canceled run must leave no output");
     }
 

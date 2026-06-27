@@ -825,7 +825,7 @@ impl Component for AppModel {
             }
             AppInput::Cancel => {
                 // Flip the shared flag the worker observes; the core returns
-                // `SymError::Canceled` and `run_job` rolls back its temp. Stay
+                // `PalError::Canceled` and `run_job` rolls back its temp. Stay
                 // `Running` until the worker reports `Finished`.
                 if let RunState::Running { cancel, .. } = &self.run_state {
                     cancel.store(true, Ordering::Relaxed);
@@ -1034,10 +1034,10 @@ impl AppModel {
         });
     }
 
-    /// Open `path` and run the core `inspect`, surfacing the [`SymError`] so the
+    /// Open `path` and run the core `inspect`, surfacing the [`PalError`] so the
     /// caller can render it via [`message::user_message`].
-    fn open_and_inspect(path: &Path) -> Result<Metadata, paladin_core::SymError> {
-        let file = std::fs::File::open(path).map_err(paladin_core::SymError::Io)?;
+    fn open_and_inspect(path: &Path) -> Result<Metadata, paladin_core::PalError> {
+        let file = std::fs::File::open(path).map_err(paladin_core::PalError::Io)?;
         inspect(std::io::BufReader::new(file))
     }
 

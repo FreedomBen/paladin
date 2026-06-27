@@ -91,7 +91,7 @@ paladin/
     ├── paladin-core/         # library — ALL crypto, format, streaming, pure helpers
     │   ├── src/
     │   │   ├── lib.rs          # public API: encrypt / decrypt / inspect / verify
-    │   │   ├── error.rs        # SymError, Result
+    │   │   ├── error.rs        # PalError, Result
     │   │   ├── secret.rs       # Secret (password + optional keyfile), zeroized
     │   │   ├── header.rs       # serialize / parse, IDs, flags, params
     │   │   ├── kdf.rs          # Argon2id / scrypt / PBKDF2 dispatch + defaults
@@ -186,7 +186,7 @@ impl Default for EncryptOptions { /* secure defaults from §12 */ }
 /// `input_len` is advisory for progress only; the §4.3 size cap is enforced
 /// from the bytes actually streamed (input plaintext on encrypt, authenticated
 /// plaintext on decrypt/verify), so a wrong hint never affects safety.
-/// Returning Break aborts with SymError::Canceled.
+/// Returning Break aborts with PalError::Canceled.
 pub struct Progress { pub done: u64, pub total: Option<u64> }
 type OnProgress = dyn FnMut(Progress) -> std::ops::ControlFlow<()>;
 
@@ -347,17 +347,17 @@ nonce[11]     = final_flag     # 0x00 for normal chunks, 0x01 for the last chunk
 - **Counter overflow:** refuse to encrypt a stream needing more than 2³² chunks
   (≈ 256 TiB at 64 KiB), which is far beyond practical inputs. On decrypt the
   counter is advanced with checked arithmetic; a stream that would exceed 2³²
-  chunks is rejected as an authentication failure (`SymError::Auth`, exit 3)
+  chunks is rejected as an authentication failure (`PalError::Auth`, exit 3)
   rather than wrapping the counter.
 - **v1 file-size cap:** refuse to encrypt, decrypt, or verify plaintext larger
   than 64 GiB. This is comfortably below the nonce counter limit and keeps
   AES-GCM usage within a conservative per-key data bound. The cap is enforced
   from streamed plaintext bytes, not from the caller's advisory `input_len`.
   Exceeding either the chunk-count or file-size limit while encrypting is
-  reported as `SymError::InputTooLarge` (exit 1), detected during streaming and
+  reported as `PalError::InputTooLarge` (exit 1), detected during streaming and
   before any file output is finalized. During decrypt/verify, an authenticated
   plaintext stream that would exceed 64 GiB is also rejected as
-  `SymError::InputTooLarge`; file outputs are removed, while stdout may already
+  `PalError::InputTooLarge`; file outputs are removed, while stdout may already
   contain plaintext written before the cap was reached. Larger-file support can
   later use explicit segment keys or another reviewed construction.
 
@@ -462,7 +462,7 @@ retained for forward compatibility and for tests that exercise multi-chunk
 streams on small inputs. `core::encrypt` validates `EncryptOptions` before
 writing any output: `kdf_params` must match `kdf`, `chunk_size` must be in
 range, and any `filename` must satisfy the basename rules from §5.2. Invalid
-programmatic options return `SymError::InvalidOptions` (exit 2), so a
+programmatic options return `PalError::InvalidOptions` (exit 2), so a
 programmatically constructed `EncryptOptions` (for example in tests) cannot
 produce a file that fails its own read validation.
 
@@ -781,7 +781,7 @@ accommodates any resulting length.
 | 4    | Unsupported, unknown, or malformed format/header |
 | 130  | Canceled by the user                             |
 
-Errors returned by `paladin-core` map directly from its `SymError` variants —
+Errors returned by `paladin-core` map directly from its `PalError` variants —
 the front-end does not reclassify them: `Auth` → 3; `BadMagic` /
 `UnsupportedVersion` / `UnsupportedAesCryptVersion` / `UnknownCipher` /
 `UnknownKdf` / `ReservedFlags` / `MalformedHeader` → 4; `InvalidOptions`
@@ -811,7 +811,7 @@ flag the worker-thread front-ends use. Cancellation is cooperative: the core
 checks before and after key derivation and between chunks, but a KDF call already
 running may finish before cancellation is observed. When cancellation is
 observed, the core's `on_progress` returns `ControlFlow::Break`, the operation
-returns `SymError::Canceled`, any temporary output is removed (§6.5), and the
+returns `PalError::Canceled`, any temporary output is removed (§6.5), and the
 process exits 130.
 
 ### 6.7 Examples
@@ -875,7 +875,7 @@ worker thread. `Progress` updates are sent over an `mpsc` channel that the UI
 drains each tick to redraw the gauge. Esc requests cancellation — the worker's
 `on_progress` callback returns `ControlFlow::Break` once the core observes the
 cancel flag before/after KDF work or between chunks, the core returns
-`SymError::Canceled`, and the front-end removes any temporary output it created
+`PalError::Canceled`, and the front-end removes any temporary output it created
 and shows a non-error canceled state. A KDF call already running may finish
 before cancellation takes effect. The password lives in a zeroizing buffer moved
 into the worker.
@@ -937,7 +937,7 @@ applies to the progress bar; success or failure arrives as a final message shown
 via an `adw::Toast` or error dialog. Cancellation uses the command's shutdown
 handle (a shared `AtomicBool`) — the core observes it before/after KDF work or
 between chunks, the `on_progress` callback returns `ControlFlow::Break`, the
-core returns `SymError::Canceled`, and the GTK worker removes any temporary
+core returns `PalError::Canceled`, and the GTK worker removes any temporary
 output it created and shows a non-error canceled state. A KDF call already
 running may finish before cancellation takes effect. The password is moved into
 the worker in a zeroizing buffer.
@@ -957,7 +957,7 @@ the worker in a zeroizing buffer.
 | `rand` / `getrandom`           | core               | CSPRNG for salt + nonce prefix           |
 | `zeroize`                      | core, cli, gtk     | Wipe key material from memory            |
 | `base64`                       | core               | ASCII armor                              |
-| `thiserror`                    | core, common       | Typed errors (`SymError`)                |
+| `thiserror`                    | core, common       | Typed errors (`PalError`)                |
 | `tempfile`                     | common, gtk, tests | Sibling temp files and test directories  |
 | `clap` (derive)                | cli, tui¹          | Argument parsing                         |
 | `rpassword`                    | cli                | No-echo password prompt                  |
@@ -1209,7 +1209,7 @@ All open questions are now settled:
       reject `--remove` with stdin, and finalize file outputs via temp-file
       rename only after success (§6.5).
 - [x] **Keyfile-only and cancellation semantics.** Keyfile-only mode requires
-      `--no-password`; cancellation returns `SymError::Canceled`, maps to CLI
+      `--no-password`; cancellation returns `PalError::Canceled`, maps to CLI
       exit 130, and is shown as non-error cancellation in UIs (§6.4, §6.6, §7,
       §8).
 - [x] **CLI edge-case behavior.** `--info` has stable `key: value` output;

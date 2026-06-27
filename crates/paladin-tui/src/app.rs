@@ -788,7 +788,7 @@ fn validate_input(s: &str) -> Result<PathBuf, String> {
 
 /// A user-acknowledged cancellation is a non-error state (not a failure).
 fn is_canceled(e: &common::AppError) -> bool {
-    matches!(e, common::AppError::Core(core::SymError::Canceled))
+    matches!(e, common::AppError::Core(core::PalError::Canceled))
 }
 
 #[cfg(test)]
@@ -1089,7 +1089,7 @@ mod tests {
     fn cancel_is_non_error_and_preserves_last_exit() {
         let mut app = App::new(None);
         app.last_exit = 3; // a prior op had failed
-        app.finish(Err(common::AppError::Core(core::SymError::Canceled)));
+        app.finish(Err(common::AppError::Core(core::PalError::Canceled)));
         assert_eq!(app.status, RunStatus::Canceled);
         assert_eq!(app.last_exit, 3); // cancel does not change the exit code
     }
@@ -1097,7 +1097,7 @@ mod tests {
     #[test]
     fn failure_maps_to_common_exit_code() {
         let mut app = App::new(None);
-        app.finish(Err(common::AppError::Core(core::SymError::Auth)));
+        app.finish(Err(common::AppError::Core(core::PalError::Auth)));
         assert!(matches!(app.status, RunStatus::Failed(_)));
         assert_eq!(app.last_exit, 3);
     }

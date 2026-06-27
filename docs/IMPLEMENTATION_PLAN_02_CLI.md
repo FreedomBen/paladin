@@ -39,7 +39,7 @@ into these APIs. Verified against the current source.
 | `Progress`, `OnProgress`                          | Progress-callback payload and signature.                     |
 | `default_encrypt_output` / `default_decrypt_output` | Default `-o` derivation (§6.5); decrypt needs a parsed `Header`. |
 | `KEYFILE_MAX_BYTES`                               | (Already enforced inside `read_keyfile`.)                    |
-| `SymError`                                         | Mapped to exit codes via `paladin-common` (never reclassified). |
+| `PalError`                                         | Mapped to exit codes via `paladin-common` (never reclassified). |
 
 ### From `paladin-common`
 
@@ -53,7 +53,7 @@ into these APIs. Verified against the current source.
 | `OutputSink::as_write()` / `OutputSink::commit()`          | Hand a `&mut dyn Write` to the core; finalize on success.        |
 | `best_effort_remove(path)`                                 | `--remove` after success.                                       |
 | `is_same_file(a, b)`                                       | (Already used inside `open_output`.)                            |
-| `exit_code(&SymError)` + `AppError::exit_code()` + `EXIT_*` | The single exit-code mapping.                                  |
+| `exit_code(&PalError)` + `AppError::exit_code()` + `EXIT_*` | The single exit-code mapping.                                  |
 | `AppError` / `AppResult` / `AppError::usage(msg)`          | The CLI's error currency before/around core calls.              |
 
 > **Cleanup-on-failure is automatic.** `OutputSink::File` holds a
@@ -249,7 +249,7 @@ Reject, with `AppError::usage` (exit 2), before any work:
   `ControlFlow::Break` if the shared cancel flag (`Arc<AtomicBool>`) is set.
 - Install a SIGINT handler (`ctrlc`) once in `main` that sets the cancel flag.
   The core observes it before/after KDF and between chunks, returns
-  `SymError::Canceled` ⇒ exit 130; the unfinalized temp output drops away.
+  `PalError::Canceled` ⇒ exit 130; the unfinalized temp output drops away.
 - **Test first:** `--progress` with `--quiet` already rejected (step 3);
   `--no-progress` produces no bar; quiet suppresses progress but not `--info`
   stdout or errors. (SIGINT timing is covered manually + a core-level cancel
@@ -300,7 +300,7 @@ Confirms every §6 rule has a home and is not duplicated.
 | Stdin requires `-o`; `--remove` rejected with stdin       | `validate.rs` / `run.rs`                     |
 | `--remove` warns-but-exits-0 on delete failure            | `run.rs` + `common::best_effort_remove`      |
 | Size cap, tamper, truncation                              | `paladin-core` (CLI just maps the error)    |
-| Exit-code mapping (`SymError` → 0/1/2/3/4/130)            | `common::exit_code` / `AppError::exit_code`  |
+| Exit-code mapping (`PalError` → 0/1/2/3/4/130)            | `common::exit_code` / `AppError::exit_code`  |
 | SIGINT ⇒ cancel flag ⇒ `Canceled` ⇒ 130                   | `progress.rs` + `main` (`ctrlc`)             |
 
 ---

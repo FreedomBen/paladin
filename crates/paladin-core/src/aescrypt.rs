@@ -5,13 +5,13 @@
 //! HMAC-SHA256 for integrity, with a two-level key hierarchy. This module reads
 //! **Stream Format 1 and 2** (current `aescrypt` 3.x output and older files).
 //! **Format 3** (PBKDF2-HMAC-SHA512) is not yet implemented — its version byte
-//! is rejected as [`SymError::UnsupportedAesCryptVersion`] (PLAN_05 v3 deferral).
+//! is rejected as [`PalError::UnsupportedAesCryptVersion`] (PLAN_05 v3 deferral).
 //!
 //! This legacy format is **only ever read**; paladin never writes it. The
 //! header, extensions, and the `fsmod` byte are **unauthenticated** (outside both
 //! HMACs); see PLAN_05 §4. A wrong password is caught early at `hmac1`, before
 //! any body byte; tampering/truncation is reported as the single
-//! [`SymError::Auth`] condition, never distinguished from a wrong password.
+//! [`PalError::Auth`] condition, never distinguished from a wrong password.
 
 use std::io::{self, Read, Write};
 use std::ops::ControlFlow;
@@ -22,7 +22,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-use crate::error::{Result, SymError};
+use crate::error::{PalError, Result};
 use crate::secret::Secret;
 use crate::stream::{OnProgress, Progress};
 
@@ -121,15 +121,15 @@ fn parse_header<R: Read>(reader: &mut R) -> Result<ParsedHeader> {
     if &magic != MAGIC {
         // format::detect already classified this as AES Crypt; a mismatch here
         // means the stream changed under us. Treat as a malformed header.
-        return Err(SymError::MalformedHeader("not an AES Crypt file"));
+        return Err(PalError::MalformedHeader("not an AES Crypt file"));
     }
     let version = read_array::<_, 1>(reader)?[0];
     if version != 0x01 && version != 0x02 {
-        return Err(SymError::UnsupportedAesCryptVersion(version));
+        return Err(PalError::UnsupportedAesCryptVersion(version));
     }
     let reserved = read_array::<_, 1>(reader)?[0];
     if reserved != 0x00 {
-        return Err(SymError::MalformedHeader(
+        return Err(PalError::MalformedHeader(
             "AES Crypt reserved byte must be zero",
         ));
     }
@@ -175,11 +175,11 @@ fn parse_extensions<R: Read>(reader: &mut R) -> Result<(usize, Option<String>, u
         }
         count += 1;
         if count > MAX_EXT_COUNT {
-            return Err(SymError::MalformedHeader("too many AES Crypt extensions"));
+            return Err(PalError::MalformedHeader("too many AES Crypt extensions"));
         }
         total += len;
         if total > MAX_EXT_TOTAL_BYTES {
-            return Err(SymError::MalformedHeader(
+            return Err(PalError::MalformedHeader(
                 "AES Crypt extensions exceed the size bound",
             ));
         }
@@ -287,12 +287,12 @@ fn decrypt_impl<R: Read, W: Write>(
     // Reject secrets incompatible with the AES Crypt format (implication #8): no
     // paladin-style keyfile component exists, and a password is required.
     if secret.has_keyfile() {
-        return Err(SymError::InvalidOptions(
+        return Err(PalError::InvalidOptions(
             "AES Crypt files do not use a paladin keyfile; pass the password directly (a UTF-8 --password-file may hold an AES Crypt key file)",
         ));
     }
     if secret.password_bytes().is_empty() {
-        return Err(SymError::InvalidOptions(
+        return Err(PalError::InvalidOptions(
             "AES Crypt files require a password",
         ));
     }
@@ -330,7 +330,7 @@ fn decrypt_impl<R: Read, W: Write>(
     // At EOF the window holds exactly the trailer; anything shorter is a
     // truncated body (indistinguishable from tampering -> Auth).
     if window.len() < TRAILER_LEN {
-        return Err(SymError::Auth);
+        return Err(PalError::Auth);
     }
     let fsmod = window[0];
     let mut hmac2 = [0u8; HMAC_LEN];
@@ -355,7 +355,7 @@ impl Body {
     fn new(key2: &[u8; 32], iv2: &[u8; IV_LEN], max_plaintext: u64) -> Result<Self> {
         Ok(Self {
             cbc: Aes256CbcDec::new_from_slices(key2, iv2)
-                .map_err(|_| SymError::MalformedHeader("invalid AES Crypt body key/iv length"))?,
+                .map_err(|_| PalError::MalformedHeader("invalid AES Crypt body key/iv length"))?,
             mac2: HmacSha256::new_from_slice(key2).expect("HMAC accepts any key length"),
             ct_carry: Vec::with_capacity(2 * BLOCK_LEN),
             held: None,
@@ -386,9 +386,9 @@ impl Body {
     fn emit<W: Write>(&mut self, block: &[u8; BLOCK_LEN], n: usize, output: &mut W) -> Result<()> {
         self.plaintext_len += n as u64;
         if self.plaintext_len > self.max_plaintext {
-            return Err(SymError::InputTooLarge);
+            return Err(PalError::InputTooLarge);
         }
-        output.write_all(&block[..n]).map_err(SymError::Io)
+        output.write_all(&block[..n]).map_err(PalError::Io)
     }
 
     /// At EOF: verify `hmac2` over all ciphertext, then finalize the held block
@@ -406,16 +406,16 @@ impl Body {
         } = self;
         // Leftover sub-block ciphertext means the run is not a multiple of 16.
         if !ct_carry.is_empty() {
-            return Err(SymError::Auth);
+            return Err(PalError::Auth);
         }
-        mac2.verify_slice(hmac2).map_err(|_| SymError::Auth)?;
+        mac2.verify_slice(hmac2).map_err(|_| PalError::Auth)?;
 
         match held {
             Some(block) => {
                 // The legacy format stores only fsmod; do not validate the
                 // final block's filler bytes (they are not PKCS#7 in v1/v2).
                 if fsmod >= BLOCK_LEN as u8 {
-                    return Err(SymError::MalformedHeader("AES Crypt fsmod must be < 16"));
+                    return Err(PalError::MalformedHeader("AES Crypt fsmod must be < 16"));
                 }
                 let n = if fsmod == 0 {
                     BLOCK_LEN
@@ -423,20 +423,20 @@ impl Body {
                     fsmod as usize
                 };
                 if plaintext_len + n as u64 > max_plaintext {
-                    return Err(SymError::InputTooLarge);
+                    return Err(PalError::InputTooLarge);
                 }
-                output.write_all(&block[..n]).map_err(SymError::Io)?;
+                output.write_all(&block[..n]).map_err(PalError::Io)?;
             }
             None => {
                 // Zero ciphertext blocks: fsmod must be 0 and nothing is written.
                 if fsmod != 0 {
-                    return Err(SymError::MalformedHeader(
+                    return Err(PalError::MalformedHeader(
                         "AES Crypt fsmod is nonzero but the body is empty",
                     ));
                 }
             }
         }
-        output.flush().map_err(SymError::Io)
+        output.flush().map_err(PalError::Io)
     }
 }
 
@@ -446,10 +446,10 @@ impl Body {
 
 /// Re-encode the password as UTF-16LE (PLAN_05 §2.4). The paladin front-ends
 /// capture passwords as UTF-8 bytes; AES Crypt v1/v2 hashes the UTF-16LE text,
-/// so non-UTF-8 password bytes are rejected as [`SymError::InvalidOptions`].
+/// so non-UTF-8 password bytes are rejected as [`PalError::InvalidOptions`].
 fn password_utf16le(password_bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     let text = std::str::from_utf8(password_bytes)
-        .map_err(|_| SymError::InvalidOptions("AES Crypt password must be valid UTF-8 text"))?;
+        .map_err(|_| PalError::InvalidOptions("AES Crypt password must be valid UTF-8 text"))?;
     let mut out = Zeroizing::new(Vec::with_capacity(text.len() * 2));
     for unit in text.encode_utf16() {
         out.extend_from_slice(&unit.to_le_bytes());
@@ -495,7 +495,7 @@ fn unwrap_keys(
 fn verify_one_shot(key: &[u8], data: &[u8], tag: &[u8]) -> Result<()> {
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(data);
-    mac.verify_slice(tag).map_err(|_| SymError::Auth)
+    mac.verify_slice(tag).map_err(|_| PalError::Auth)
 }
 
 // ---------------------------------------------------------------------------
@@ -506,12 +506,12 @@ fn verify_one_shot(key: &[u8], data: &[u8], tag: &[u8]) -> Result<()> {
 fn report(on_progress: &mut OnProgress<'_>, done: u64, total: Option<u64>) -> Result<()> {
     match on_progress(Progress { done, total }) {
         ControlFlow::Continue(()) => Ok(()),
-        ControlFlow::Break(()) => Err(SymError::Canceled),
+        ControlFlow::Break(()) => Err(PalError::Canceled),
     }
 }
 
 /// Read exactly `N` bytes for a fixed header field; a short read is a truncated
-/// header ([`SymError::MalformedHeader`]).
+/// header ([`PalError::MalformedHeader`]).
 fn read_array<R: Read, const N: usize>(reader: &mut R) -> Result<[u8; N]> {
     let mut buf = [0u8; N];
     fill_exact(reader, &mut buf)?;
@@ -532,16 +532,16 @@ fn fill_exact<R: Read>(reader: &mut R, buf: &mut [u8]) -> Result<()> {
     while filled < buf.len() {
         match reader.read(&mut buf[filled..]) {
             Ok(0) => {
-                return Err(SymError::MalformedHeader(
+                return Err(PalError::MalformedHeader(
                     "unexpected end of input before the AES Crypt header was complete",
                 ))
             }
             Ok(n) => filled += n,
             Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => {
-                return Err(match crate::error::recover_symerror(e) {
+                return Err(match crate::error::recover_palerror(e) {
                     Ok(sym) => sym,
-                    Err(e) => SymError::Io(e),
+                    Err(e) => PalError::Io(e),
                 })
             }
         }
@@ -559,9 +559,9 @@ fn read_up_to<R: Read>(reader: &mut R, max: usize) -> Result<Vec<u8>> {
             Ok(n) => filled += n,
             Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => {
-                return Err(match crate::error::recover_symerror(e) {
+                return Err(match crate::error::recover_palerror(e) {
                     Ok(sym) => sym,
-                    Err(e) => SymError::Io(e),
+                    Err(e) => PalError::Io(e),
                 })
             }
         }
@@ -648,7 +648,7 @@ mod tests {
         // Non-UTF-8 password bytes are rejected before any derivation.
         assert!(matches!(
             password_utf16le(&[0xFF, 0xFE]),
-            Err(SymError::InvalidOptions(_))
+            Err(PalError::InvalidOptions(_))
         ));
     }
 
@@ -715,7 +715,7 @@ mod tests {
         let mut out = Vec::new();
         let mut cb = noop();
         let err = decrypt(V2_SIZE_17, &mut out, &secret(b"wrong"), None, &mut cb);
-        assert!(matches!(err, Err(SymError::Auth)));
+        assert!(matches!(err, Err(PalError::Auth)));
         assert!(out.is_empty(), "no plaintext before the hmac1 gate");
     }
 
@@ -726,7 +726,7 @@ mod tests {
         let mut t = V2_SIZE_17.to_vec();
         let enc_keys_start = header_len(V2_SIZE_17) - HMAC_LEN - ENC_KEYS_LEN;
         t[enc_keys_start + 5] ^= 0x01;
-        assert!(matches!(dec(&t, PASSWORD), Err(SymError::Auth)));
+        assert!(matches!(dec(&t, PASSWORD), Err(PalError::Auth)));
     }
 
     #[test]
@@ -734,7 +734,7 @@ mod tests {
         let mut t = V2_SIZE_3000.to_vec();
         let mid = t.len() - HMAC_LEN - 100; // a ciphertext byte well inside the body
         t[mid] ^= 0x01;
-        assert!(matches!(dec(&t, PASSWORD), Err(SymError::Auth)));
+        assert!(matches!(dec(&t, PASSWORD), Err(PalError::Auth)));
     }
 
     #[test]
@@ -742,12 +742,12 @@ mod tests {
         // Drop the final byte (corrupts hmac2).
         assert!(matches!(
             dec(&V2_SIZE_17[..V2_SIZE_17.len() - 1], PASSWORD),
-            Err(SymError::Auth)
+            Err(PalError::Auth)
         ));
         // Drop the whole trailer: body shorter than fsmod+hmac2.
         assert!(matches!(
             dec(&V2_SIZE_17[..V2_SIZE_17.len() - TRAILER_LEN], PASSWORD),
-            Err(SymError::Auth)
+            Err(PalError::Auth)
         ));
     }
 
@@ -755,14 +755,14 @@ mod tests {
     fn appending_bytes_fails_auth() {
         let mut t = V2_SIZE_17.to_vec();
         t.extend_from_slice(&[0u8; 16]); // shifts the trailer; hmac2 no longer matches
-        assert!(matches!(dec(&t, PASSWORD), Err(SymError::Auth)));
+        assert!(matches!(dec(&t, PASSWORD), Err(PalError::Auth)));
     }
 
     #[test]
     fn body_not_a_multiple_of_16_fails_auth() {
         let mut t = V2_SIZE_17.to_vec();
         t.insert(t.len() - TRAILER_LEN, 0x00); // one extra ciphertext byte
-        assert!(matches!(dec(&t, PASSWORD), Err(SymError::Auth)));
+        assert!(matches!(dec(&t, PASSWORD), Err(PalError::Auth)));
     }
 
     // --- Format / malformed (-> exit 4) ---
@@ -775,7 +775,7 @@ mod tests {
             assert!(
                 matches!(
                     dec(&t, PASSWORD),
-                    Err(SymError::UnsupportedAesCryptVersion(v)) if v == bad
+                    Err(PalError::UnsupportedAesCryptVersion(v)) if v == bad
                 ),
                 "version {bad:#04x}"
             );
@@ -788,7 +788,7 @@ mod tests {
         t[4] = 0x01;
         assert!(matches!(
             dec(&t, PASSWORD),
-            Err(SymError::MalformedHeader(_))
+            Err(PalError::MalformedHeader(_))
         ));
     }
 
@@ -797,7 +797,7 @@ mod tests {
         // Cut off mid-header (before iv1/enc_keys/hmac1 are complete).
         assert!(matches!(
             dec(&V2_SIZE_17[..10], PASSWORD),
-            Err(SymError::MalformedHeader(_))
+            Err(PalError::MalformedHeader(_))
         ));
     }
 
@@ -811,7 +811,7 @@ mod tests {
         t[fsmod_off] = 16; // >= 16 is invalid
         assert!(matches!(
             dec(&t, PASSWORD),
-            Err(SymError::MalformedHeader(_))
+            Err(PalError::MalformedHeader(_))
         ));
     }
 
@@ -824,7 +824,7 @@ mod tests {
         t[fsmod_off] = 5;
         assert!(matches!(
             dec(&t, PASSWORD),
-            Err(SymError::MalformedHeader(_))
+            Err(PalError::MalformedHeader(_))
         ));
     }
 
@@ -842,7 +842,7 @@ mod tests {
         }
         assert!(matches!(
             parse_header(&mut io::Cursor::new(h)),
-            Err(SymError::MalformedHeader(_))
+            Err(PalError::MalformedHeader(_))
         ));
     }
 
@@ -862,7 +862,7 @@ mod tests {
         }
         assert!(matches!(
             parse_header(&mut io::Cursor::new(h)),
-            Err(SymError::MalformedHeader(_))
+            Err(PalError::MalformedHeader(_))
         ));
     }
 
@@ -875,7 +875,7 @@ mod tests {
         let mut cb = noop();
         assert!(matches!(
             decrypt(V2_SIZE_17, &mut out, &kf, None, &mut cb),
-            Err(SymError::InvalidOptions(_))
+            Err(PalError::InvalidOptions(_))
         ));
     }
 
@@ -886,7 +886,7 @@ mod tests {
         let mut cb = noop();
         assert!(matches!(
             decrypt(V2_SIZE_17, &mut out, &kf_only, None, &mut cb),
-            Err(SymError::InvalidOptions(_))
+            Err(PalError::InvalidOptions(_))
         ));
     }
 
@@ -897,7 +897,7 @@ mod tests {
         let mut cb = noop();
         assert!(matches!(
             decrypt(V2_SIZE_17, &mut out, &pw, None, &mut cb),
-            Err(SymError::InvalidOptions(_))
+            Err(PalError::InvalidOptions(_))
         ));
     }
 
@@ -916,7 +916,7 @@ mod tests {
             &mut cb,
             100,
         );
-        assert!(matches!(err, Err(SymError::InputTooLarge)));
+        assert!(matches!(err, Err(PalError::InputTooLarge)));
     }
 
     #[test]
@@ -925,7 +925,7 @@ mod tests {
         let mut cb = |_: Progress| ControlFlow::Break(());
         assert!(matches!(
             decrypt(V2_SIZE_17, &mut out, &secret(PASSWORD), None, &mut cb),
-            Err(SymError::Canceled)
+            Err(PalError::Canceled)
         ));
         assert!(out.is_empty());
     }
@@ -946,7 +946,7 @@ mod tests {
         let mut out = Vec::new();
         assert!(matches!(
             decrypt(V2_SIZE_3000, &mut out, &secret(PASSWORD), None, &mut cb),
-            Err(SymError::Canceled)
+            Err(PalError::Canceled)
         ));
     }
 }

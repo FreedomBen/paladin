@@ -183,7 +183,7 @@ Mirror DESIGN §6.4 semantics in-UI, then hand bytes to the core:
 ### 4.6 Cancellation & errors
 
 - `Esc` during a run flips the cancel flag; the core observes it before/after
-  KDF work and between chunks, returns `SymError::Canceled`, the worker removes
+  KDF work and between chunks, returns `PalError::Canceled`, the worker removes
   any temp output, and the UI shows a **non-error** canceled state. A KDF call
   already running may finish first.
 - Error messages and the **process exit code** come from
@@ -244,7 +244,7 @@ logic into pure, unit-tested functions (`options.rs`, `field.rs`) and keep
   `FromStr`/`Display`.
 - **Line editor (`field.rs`):** insert/delete, cursor moves, Home/End, and
   masking render.
-- **Exit-code passthrough:** `SymError` variants map to the shared codes via
+- **Exit-code passthrough:** `PalError` variants map to the shared codes via
   `common::exit_code`; a user-acknowledged cancel leaves the exit status at the
   last completed operation's code (not 130) on a normal quit.
 
@@ -309,7 +309,7 @@ for the static layout; the four operations are already covered exhaustively in
 
 **Phase 6 — Errors & exit codes**
 
-- [x] Map `SymError`/`AppError` → messages + process exit via `common::exit_code`.
+- [x] Map `PalError`/`AppError` → messages + process exit via `common::exit_code`.
 - [x] Light unit tests of non-UI glue (`-` rejection, validation, mapping).
 
 **Phase 7 — Docs & packaging**

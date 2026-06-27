@@ -3,8 +3,8 @@
 //!
 //! The §5.4 cost ranges are validated by [`KdfParams::validate`], which returns
 //! the failing check's name. The *caller* chooses the error variant: a header
-//! read maps it to [`SymError::MalformedHeader`] (exit 4); user-supplied
-//! encryption knobs map it to [`SymError::InvalidOptions`] (exit 2). All
+//! read maps it to [`PalError::MalformedHeader`] (exit 4); user-supplied
+//! encryption knobs map it to [`PalError::InvalidOptions`] (exit 2). All
 //! validation happens before any allocation or key derivation.
 
 use std::fmt;
@@ -17,7 +17,7 @@ use scrypt::{scrypt, Params as ScryptParams};
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
-use crate::error::{Result, SymError};
+use crate::error::{PalError, Result};
 
 // --- §5.4 cost ranges (KDF portion) ---
 const ARGON2_MEMORY_KIB: std::ops::RangeInclusive<u32> = 8192..=1_048_576;
@@ -63,13 +63,13 @@ impl KdfId {
     }
 
     /// Parse a `kdf_id` byte read from a header. An unrecognized id is
-    /// [`SymError::UnknownKdf`] (exit 4), never a guess.
+    /// [`PalError::UnknownKdf`] (exit 4), never a guess.
     pub(crate) fn from_id(id: u8) -> Result<Self> {
         match id {
             0x01 => Ok(KdfId::Argon2id),
             0x02 => Ok(KdfId::Scrypt),
             0x03 => Ok(KdfId::Pbkdf2),
-            other => Err(SymError::UnknownKdf(other)),
+            other => Err(PalError::UnknownKdf(other)),
         }
     }
 }
@@ -81,16 +81,16 @@ impl fmt::Display for KdfId {
 }
 
 impl FromStr for KdfId {
-    type Err = SymError;
+    type Err = PalError;
 
     /// Exact, lowercase match only (DESIGN §6.3). An unknown name is a usage
-    /// error ([`SymError::InvalidOptions`], exit 2).
+    /// error ([`PalError::InvalidOptions`], exit 2).
     fn from_str(s: &str) -> Result<Self> {
         match s {
             "argon2id" => Ok(KdfId::Argon2id),
             "scrypt" => Ok(KdfId::Scrypt),
             "pbkdf2" => Ok(KdfId::Pbkdf2),
-            _ => Err(SymError::InvalidOptions(
+            _ => Err(PalError::InvalidOptions(
                 "unknown kdf (expected argon2id, scrypt, or pbkdf2)",
             )),
         }
@@ -280,8 +280,8 @@ impl KdfParams {
 /// A KDF resource/parameter failure on already-validated input (e.g. memory
 /// exhaustion). Mapped to a general error so the variant set stays as DESIGN
 /// §6.6 specifies.
-fn kdf_failure() -> SymError {
-    SymError::Io(io::Error::other(
+fn kdf_failure() -> PalError {
+    PalError::Io(io::Error::other(
         "key derivation failed (resource exhaustion or invalid parameters)",
     ))
 }
@@ -335,7 +335,7 @@ mod tests {
         for unknown in [0x00, 0x04, 0xff] {
             assert!(matches!(
                 KdfId::from_id(unknown),
-                Err(SymError::UnknownKdf(_))
+                Err(PalError::UnknownKdf(_))
             ));
         }
     }

@@ -24,7 +24,7 @@ mod stream;
 
 pub use aescrypt::{AesCryptHeader, AesCryptKdf};
 pub use cipher::CipherId;
-pub use error::{Result, SymError};
+pub use error::{PalError, Result};
 pub use header::{Header, NameStatus};
 pub use kdf::{KdfId, KdfParams};
 pub use paths::{default_aescrypt_output, default_decrypt_output, default_encrypt_output};
@@ -57,9 +57,9 @@ pub fn encrypt<R: Read, W: Write>(
     on_progress: &mut OnProgress<'_>,
 ) -> Result<()> {
     if opts.armor {
-        let mut writer = armor::ArmorWriter::new(output).map_err(SymError::Io)?;
+        let mut writer = armor::ArmorWriter::new(output).map_err(PalError::Io)?;
         stream::encrypt(input, &mut writer, secret, opts, input_len, on_progress)?;
-        writer.finish().map_err(SymError::Io)?;
+        writer.finish().map_err(PalError::Io)?;
         Ok(())
     } else {
         stream::encrypt(input, output, secret, opts, input_len, on_progress)
@@ -69,7 +69,7 @@ pub fn encrypt<R: Read, W: Write>(
 /// Decrypt `input` to `output`, verifying every authentication tag. Armor is
 /// auto-detected and stripped (DESIGN §5.6); the container format (paladin or
 /// AES Crypt) is then auto-detected (PLAN_05 §3.1). A failed tag is reported as
-/// the single [`SymError::Auth`] condition for either format.
+/// the single [`PalError::Auth`] condition for either format.
 pub fn decrypt<R: Read, W: Write>(
     input: R,
     output: W,
@@ -186,7 +186,7 @@ mod tests {
         let mut cb = noop();
         assert!(matches!(
             verify(tampered.as_slice(), &secret(), None, &mut cb),
-            Err(SymError::Auth)
+            Err(PalError::Auth)
         ));
     }
 
@@ -199,13 +199,13 @@ mod tests {
             b"-----BEGIN PALADIN MESSAGE-----\n!!!!not base64!!!!\n-----END PALADIN MESSAGE-----\n";
         assert!(matches!(
             inspect(bad.as_ref()),
-            Err(SymError::MalformedHeader(_))
+            Err(PalError::MalformedHeader(_))
         ));
         let mut out = Vec::new();
         let mut cb = noop();
         assert!(matches!(
             decrypt(bad.as_ref(), &mut out, &secret(), None, &mut cb),
-            Err(SymError::MalformedHeader(_))
+            Err(PalError::MalformedHeader(_))
         ));
     }
 
@@ -264,7 +264,7 @@ mod tests {
                 None,
                 &mut cb
             ),
-            Err(SymError::BadMagic)
+            Err(PalError::BadMagic)
         ));
     }
 }

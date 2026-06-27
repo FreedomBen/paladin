@@ -3,7 +3,7 @@
 //! Crypto runs on the main thread here; the progress bar renders on stderr and
 //! a SIGINT handler flips a shared cancel flag. The core observes the flag
 //! through the `on_progress` callback (returning `ControlFlow::Break`), returns
-//! `SymError::Canceled`, and the unfinalized temp output is dropped.
+//! `PalError::Canceled`, and the unfinalized temp output is dropped.
 
 use crate::cli::Cli;
 use indicatif::{ProgressBar, ProgressStyle};

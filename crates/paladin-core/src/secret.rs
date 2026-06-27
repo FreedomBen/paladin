@@ -8,7 +8,7 @@ use std::fmt;
 
 use zeroize::Zeroizing;
 
-use crate::error::{Result, SymError};
+use crate::error::{PalError, Result};
 
 /// Domain-separation prefix for the KDF input (DESIGN §4.2). The trailing NUL is
 /// part of the constant.
@@ -31,23 +31,23 @@ pub struct Secret {
 impl Secret {
     /// Build a [`Secret`] from raw password bytes and an optional keyfile.
     ///
-    /// Returns [`SymError::InvalidOptions`] (exit 2) if both are empty, or if a
+    /// Returns [`PalError::InvalidOptions`] (exit 2) if both are empty, or if a
     /// supplied keyfile is empty or larger than [`KEYFILE_MAX_BYTES`]. The
     /// caller owns zeroization of the slices it passes in; the bytes are copied
     /// into zeroizing storage here.
     pub fn new(password: &[u8], keyfile: Option<&[u8]>) -> Result<Self> {
         if let Some(kf) = keyfile {
             if kf.is_empty() {
-                return Err(SymError::InvalidOptions(
+                return Err(PalError::InvalidOptions(
                     "keyfile is empty (must be 1 byte..=1 MiB)",
                 ));
             }
             if kf.len() > KEYFILE_MAX_BYTES {
-                return Err(SymError::InvalidOptions("keyfile exceeds 1 MiB"));
+                return Err(PalError::InvalidOptions("keyfile exceeds 1 MiB"));
             }
         }
         if password.is_empty() && keyfile.is_none() {
-            return Err(SymError::InvalidOptions(
+            return Err(PalError::InvalidOptions(
                 "empty secret: a password or keyfile is required",
             ));
         }
@@ -109,7 +109,7 @@ mod tests {
     fn empty_password_and_no_keyfile_is_rejected() {
         assert!(matches!(
             Secret::new(b"", None),
-            Err(SymError::InvalidOptions(_))
+            Err(PalError::InvalidOptions(_))
         ));
     }
 
@@ -117,12 +117,12 @@ mod tests {
     fn empty_keyfile_is_rejected() {
         assert!(matches!(
             Secret::new(b"pw", Some(b"")),
-            Err(SymError::InvalidOptions(_))
+            Err(PalError::InvalidOptions(_))
         ));
         // Even with an otherwise-empty password.
         assert!(matches!(
             Secret::new(b"", Some(b"")),
-            Err(SymError::InvalidOptions(_))
+            Err(PalError::InvalidOptions(_))
         ));
     }
 
@@ -131,7 +131,7 @@ mod tests {
         let too_big = vec![0u8; KEYFILE_MAX_BYTES + 1];
         assert!(matches!(
             Secret::new(b"pw", Some(&too_big)),
-            Err(SymError::InvalidOptions(_))
+            Err(PalError::InvalidOptions(_))
         ));
         let exactly_max = vec![0u8; KEYFILE_MAX_BYTES];
         assert!(Secret::new(b"", Some(&exactly_max)).is_ok());

@@ -7,7 +7,7 @@
 
 use std::io::{self, Read};
 
-use crate::error::{Result, SymError};
+use crate::error::{PalError, Result};
 
 /// Native paladin magic (DESIGN §5.2): ASCII "PALADIN" plus a NUL pad (8 bytes).
 const PALADIN_MAGIC: &[u8] = b"PALADIN\0";
@@ -25,8 +25,8 @@ pub(crate) enum Format {
 
 /// Peek the leading magic and return the [`Format`] plus a reader that still
 /// yields the peeked bytes (PLAN_05 §3.1). A fully-read prefix matching neither
-/// magic is [`SymError::BadMagic`]; a short input that is a proper prefix of a
-/// supported magic is [`SymError::MalformedHeader`] (a truncated header). The
+/// magic is [`PalError::BadMagic`]; a short input that is a proper prefix of a
+/// supported magic is [`PalError::MalformedHeader`] (a truncated header). The
 /// AES Crypt magic is only 3 bytes, so an `"AES"` prefix dispatches to the AES
 /// parser regardless of the following bytes (it reports any unsupported version
 /// itself).
@@ -38,11 +38,11 @@ pub(crate) fn detect<R: Read>(mut input: R) -> Result<(Format, impl Read)> {
     } else if peek == PALADIN_MAGIC {
         Format::Paladin
     } else if is_proper_prefix_of_magic(&peek) {
-        return Err(SymError::MalformedHeader(
+        return Err(PalError::MalformedHeader(
             "input ends before the file magic is complete",
         ));
     } else {
-        return Err(SymError::BadMagic);
+        return Err(PalError::BadMagic);
     };
 
     Ok((format, io::Cursor::new(peek).chain(input)))
@@ -67,9 +67,9 @@ fn read_up_to<R: Read>(reader: &mut R, max: usize) -> Result<Vec<u8>> {
             Ok(n) => filled += n,
             Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => {
-                return Err(match crate::error::recover_symerror(e) {
+                return Err(match crate::error::recover_palerror(e) {
                     Ok(sym) => sym,
-                    Err(e) => SymError::Io(e),
+                    Err(e) => PalError::Io(e),
                 })
             }
         }
@@ -87,7 +87,7 @@ mod tests {
     fn detect_and_drain(bytes: &[u8]) -> Result<(Format, Vec<u8>)> {
         let (format, mut reader) = detect(io::Cursor::new(bytes.to_vec()))?;
         let mut out = Vec::new();
-        reader.read_to_end(&mut out).map_err(SymError::Io)?;
+        reader.read_to_end(&mut out).map_err(PalError::Io)?;
         Ok((format, out))
     }
 
@@ -116,12 +116,12 @@ mod tests {
         // A full 8-byte prefix matching neither magic.
         assert!(matches!(
             detect_and_drain(b"GARBAGE!and more"),
-            Err(SymError::BadMagic)
+            Err(PalError::BadMagic)
         ));
         // Eight bytes that share the PALADIN prefix but differ in the 8th byte.
         assert!(matches!(
             detect_and_drain(b"PALADINxtail"),
-            Err(SymError::BadMagic)
+            Err(PalError::BadMagic)
         ));
     }
 
@@ -130,7 +130,7 @@ mod tests {
         // Proper prefixes of PALADIN and of AES are treated as truncated headers.
         for short in [b"".as_slice(), b"P", b"PAL", b"PALADIN", b"A", b"AE"] {
             assert!(
-                matches!(detect_and_drain(short), Err(SymError::MalformedHeader(_))),
+                matches!(detect_and_drain(short), Err(PalError::MalformedHeader(_))),
                 "prefix {short:?} should be MalformedHeader"
             );
         }

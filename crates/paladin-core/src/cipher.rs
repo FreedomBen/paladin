@@ -13,7 +13,7 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::Aes256Gcm;
 use chacha20poly1305::ChaCha20Poly1305;
 
-use crate::error::{Result, SymError};
+use crate::error::{PalError, Result};
 
 /// AEAD cipher selector. The default for new files is [`CipherId::Aes256Gcm`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,12 +42,12 @@ impl CipherId {
     }
 
     /// Parse a `cipher_id` byte read from a header. An unrecognized id is
-    /// [`SymError::UnknownCipher`] (exit 4), never a guess.
+    /// [`PalError::UnknownCipher`] (exit 4), never a guess.
     pub(crate) fn from_id(id: u8) -> Result<Self> {
         match id {
             0x01 => Ok(CipherId::Aes256Gcm),
             0x02 => Ok(CipherId::ChaCha20Poly1305),
-            other => Err(SymError::UnknownCipher(other)),
+            other => Err(PalError::UnknownCipher(other)),
         }
     }
 }
@@ -59,15 +59,15 @@ impl fmt::Display for CipherId {
 }
 
 impl FromStr for CipherId {
-    type Err = SymError;
+    type Err = PalError;
 
     /// Exact, lowercase match only (DESIGN §6.3). An unknown name is a usage
-    /// error ([`SymError::InvalidOptions`], exit 2).
+    /// error ([`PalError::InvalidOptions`], exit 2).
     fn from_str(s: &str) -> Result<Self> {
         match s {
             "aes-256-gcm" => Ok(CipherId::Aes256Gcm),
             "chacha20-poly1305" => Ok(CipherId::ChaCha20Poly1305),
-            _ => Err(SymError::InvalidOptions(
+            _ => Err(PalError::InvalidOptions(
                 "unknown cipher (expected aes-256-gcm or chacha20-poly1305)",
             )),
         }
@@ -99,7 +99,7 @@ impl Cipher {
     /// The only documented failure mode of AEAD encryption is a message longer
     /// than the cipher's per-message limit; paladin's chunks are bounded far
     /// below it (DESIGN §5.4), so this is unreachable in practice and mapped to
-    /// [`SymError::InputTooLarge`] for safety rather than panicking.
+    /// [`PalError::InputTooLarge`] for safety rather than panicking.
     pub(crate) fn seal(&self, nonce: &[u8; 12], aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
         let payload = Payload {
             msg: plaintext,
@@ -109,13 +109,13 @@ impl Cipher {
             Cipher::Aes(c) => c.encrypt(aes_gcm::Nonce::from_slice(nonce), payload),
             Cipher::Cha(c) => c.encrypt(chacha20poly1305::Nonce::from_slice(nonce), payload),
         };
-        out.map_err(|_| SymError::InputTooLarge)
+        out.map_err(|_| PalError::InputTooLarge)
     }
 
     /// Decrypt and authenticate one chunk (`ciphertext ‖ tag`).
     ///
     /// Any failure — wrong key, wrong nonce, altered AAD, flipped bit, or a
-    /// too-short buffer — is reported as the single [`SymError::Auth`] condition
+    /// too-short buffer — is reported as the single [`PalError::Auth`] condition
     /// (DESIGN §4.4), never distinguishing tampering from a wrong password.
     pub(crate) fn open(&self, nonce: &[u8; 12], aad: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
         let payload = Payload {
@@ -126,7 +126,7 @@ impl Cipher {
             Cipher::Aes(c) => c.decrypt(aes_gcm::Nonce::from_slice(nonce), payload),
             Cipher::Cha(c) => c.decrypt(chacha20poly1305::Nonce::from_slice(nonce), payload),
         };
-        out.map_err(|_| SymError::Auth)
+        out.map_err(|_| PalError::Auth)
     }
 }
 
@@ -183,7 +183,7 @@ mod tests {
         for unknown in [0x00, 0x03, 0xff] {
             assert!(matches!(
                 CipherId::from_id(unknown),
-                Err(SymError::UnknownCipher(_))
+                Err(PalError::UnknownCipher(_))
             ));
         }
     }
@@ -212,7 +212,7 @@ mod tests {
             let ct = c.seal(&NONCE, b"header-v1", b"secret").unwrap();
             assert!(matches!(
                 c.open(&NONCE, b"header-v2", &ct),
-                Err(SymError::Auth)
+                Err(PalError::Auth)
             ));
         }
     }
@@ -226,26 +226,26 @@ mod tests {
             let wrong_key = Cipher::new(id, &[9u8; 32]);
             assert!(matches!(
                 wrong_key.open(&NONCE, b"aad", &ct),
-                Err(SymError::Auth)
+                Err(PalError::Auth)
             ));
 
             let wrong_nonce = [4u8; 12];
             assert!(matches!(
                 c.open(&wrong_nonce, b"aad", &ct),
-                Err(SymError::Auth)
+                Err(PalError::Auth)
             ));
 
             let mut tampered = ct.clone();
             tampered[0] ^= 0x01;
             assert!(matches!(
                 c.open(&NONCE, b"aad", &tampered),
-                Err(SymError::Auth)
+                Err(PalError::Auth)
             ));
 
             // A buffer too short to hold a tag is also just an auth failure.
             assert!(matches!(
                 c.open(&NONCE, b"aad", b"short"),
-                Err(SymError::Auth)
+                Err(PalError::Auth)
             ));
         }
     }

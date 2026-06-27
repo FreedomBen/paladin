@@ -45,13 +45,13 @@ These come straight from §2.2 and must hold for every line in `paladin-core`:
 - Never reads argv, never prompts, never touches the filesystem, never decides
   whether to overwrite, never exits the process.
 - Operates on generic `Read`/`Write`; reports progress through an `on_progress`
-  callback that returns `ControlFlow::Break` to cancel (→ `SymError::Canceled`).
+  callback that returns `ControlFlow::Break` to cancel (→ `PalError::Canceled`).
 - **RustCrypto crates only** — no hand-rolled crypto (§4.1).
 - All key material and derived buffers wrapped in `zeroize` (§4.1, §11).
 - All multi-byte integers **big-endian** on the wire (§5.1).
 - Unauthenticated header lengths/KDF costs are range-checked **before** any
   allocation or key derivation (§5.4, §11).
-- `SymError` → exit-code classification lives in `paladin-common`, **not** in
+- `PalError` → exit-code classification lives in `paladin-common`, **not** in
   the core and **not** in the front-ends (§6.6).
 
 ## Crates to scaffold & dependency direction
@@ -116,7 +116,7 @@ later phases use it. Variants align 1:1 with the §6.6 exit-code mapping.
 ```rust
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]               // future variants must not break front-end matches
-pub enum SymError {
+pub enum PalError {
     Auth,                       // wrong password OR corrupt/tampered (indistinguishable) → 3
     BadMagic,                   // not a paladin file                                    → 4
     UnsupportedVersion(u8),     //                                                        → 4
@@ -129,10 +129,10 @@ pub enum SymError {
     Canceled,                   // on_progress returned Break                             → 130
     Io(#[from] std::io::Error), //                                                        → 1
 }
-pub type Result<T> = std::result::Result<T, SymError>;
+pub type Result<T> = std::result::Result<T, PalError>;
 ```
 
-**As built:** `ReservedFlags(u8)` carries the offending flag byte, and `SymError`
+**As built:** `ReservedFlags(u8)` carries the offending flag byte, and `PalError`
 is `#[non_exhaustive]` — so the `exit_code` classifier in `paladin-common` keeps
 a catch-all `_ => EXIT_GENERAL` arm for any future variant.
 
@@ -144,7 +144,7 @@ a catch-all `_ => EXIT_GENERAL` arm for any future variant.
 
 **Checklist**
 
-- [x] `SymError` with all variants from §6.6 + `Result<T>` alias.
+- [x] `PalError` with all variants from §6.6 + `Result<T>` alias.
 - [x] `Auth` message conflates wrong-password and tamper (§4.4).
 - [x] `From<io::Error>` impl + tests.
 
@@ -276,7 +276,7 @@ impl KdfParams {
 **As built (naming):** `default_params` → `default_for`; `matches(kdf)` →
 `kdf_id() == kdf`; `ranges_ok() -> bool` → `validate() -> Result<(), &'static
 str>`; `to_wire`/`from_wire` → `to_words`/`from_words` (both return the reason
-string, not a `SymError`, so the caller chooses `MalformedHeader` vs
+string, not a `PalError`, so the caller chooses `MalformedHeader` vs
 `InvalidOptions`); `derive_key` is a method on `KdfParams`, not a free function.
 
 Range rules (§5.4) — validate **before** deriving:
@@ -462,12 +462,12 @@ Rules to implement:
   chunk, swapped chunks, sub-tag fragment, empty body.
 - Size cap: with a tiny `size_cap`, encrypt of `cap+1` bytes → `InputTooLarge`;
   a crafted over-cap authenticated stream → decrypt/verify `InputTooLarge`.
-- Cancellation: an `on_progress` returning `Break` → `SymError::Canceled`, on the
+- Cancellation: an `on_progress` returning `Break` → `PalError::Canceled`, on the
   encrypt path (before KDF and between chunks) and on the decrypt/verify path.
 - Per-file uniqueness: two encryptions of identical input/secret/opts produce
   different ciphertext (fresh random salt + nonce prefix) and both still decrypt.
 - I/O errors: a failing `Write` (encrypt) and a failing `Read` mid-body (decrypt)
-  surface as `SymError::Io`, distinct from EOF→`MalformedHeader` and tag→`Auth`.
+  surface as `PalError::Io`, distinct from EOF→`MalformedHeader` and tag→`Auth`.
 - Chunk-count overflow: driving the `start_counter` seam to `u32::MAX` makes a
   multi-chunk encrypt return `InputTooLarge`. (The decrypt-side guard is left
   uncovered: reaching it would require forging 2^32 authentic chunks.)
@@ -736,13 +736,13 @@ vectors (no `tests/vectors/` directory):
 **Responsibilities & API sketch**
 
 ```rust
-// error.rs — exit-code mapping (the ONLY place SymError is classified, §6.6) plus
-// the front-end error type. SymError is #[non_exhaustive], so exit_code keeps a
+// error.rs — exit-code mapping (the ONLY place PalError is classified, §6.6) plus
+// the front-end error type. PalError is #[non_exhaustive], so exit_code keeps a
 // catch-all `_ => EXIT_GENERAL`.
 pub const EXIT_OK/EXIT_GENERAL/EXIT_USAGE/EXIT_AUTH/EXIT_FORMAT/EXIT_CANCELED: i32; // 0/1/2/3/4/130
-pub fn exit_code(err: &SymError) -> i32; // Auth→3, BadMagic/Version/Cipher/Kdf/ReservedFlags/Malformed→4,
+pub fn exit_code(err: &PalError) -> i32; // Auth→3, BadMagic/Version/Cipher/Kdf/ReservedFlags/Malformed→4,
                                          // InvalidOptions→2, Canceled→130, Io/InputTooLarge/_→1
-pub enum AppError { Core(SymError), Usage(String), Io(io::Error) } // replaces the sketch's `UsageError`
+pub enum AppError { Core(PalError), Usage(String), Io(io::Error) } // replaces the sketch's `UsageError`
 impl AppError { pub fn usage(msg: impl Into<String>) -> Self; pub fn exit_code(&self) -> i32; }
 pub type AppResult<T> = Result<T, AppError>;
 
@@ -791,7 +791,7 @@ Rules to enforce (from §6.4/§6.5):
 
 **Tests first** (unit, with `tempfile`)
 
-- `exit_code` for every `SymError` variant → §6.6 table.
+- `exit_code` for every `PalError` variant → §6.6 table.
 - Source exclusivity (two sources → error); empty-source rejection per source;
   `--no-password` empty accepted only with a keyfile.
 - password-file: trailing LF/CRLF trim, >1 MiB rejected, `-` rejected,
@@ -852,7 +852,7 @@ Rules to enforce (from §6.4/§6.5):
 - All Phase 0–12 checklists ticked.
 - `paladin-core` exposes exactly the §2.3 surface and never crosses its §2.2
   boundary.
-- `paladin-common` is the sole place `SymError` is mapped to exit codes.
+- `paladin-common` is the sole place `PalError` is mapped to exit codes.
 - Every §10 test exists and passes; `fmt`/`clippy` clean.
 - The CLI plan (`IMPLEMENTATION_PLAN_02_CLI.md`) can build entirely on the public
   core API + common glue with no further core changes.

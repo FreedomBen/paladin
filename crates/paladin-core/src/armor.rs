@@ -9,20 +9,20 @@
 //! - [`ArmorReader`] wraps a `Read`: it strips the markers, accepts LF/CRLF and
 //!   surrounding whitespace, decodes base64 across line boundaries, and rejects
 //!   junk outside the markers, invalid base64, an over-long line, and a missing
-//!   END marker as [`SymError::MalformedHeader`].
+//!   END marker as [`PalError::MalformedHeader`].
 //! - [`auto_dearmor`] peeks the input and returns a [`DearmorReader`] that is
 //!   either the raw stream (binary) or an [`ArmorReader`] (armored).
 //!
 //! Framing errors discovered mid-stream are wrapped in `io::Error::other` so
 //! they surface through the `Read` interface; the header/stream read paths
-//! recover them with [`crate::error::recover_symerror`].
+//! recover them with [`crate::error::recover_palerror`].
 
 use std::io::{self, Read, Write};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 
-use crate::error::{Result, SymError};
+use crate::error::{PalError, Result};
 
 const BEGIN_MARKER: &str = "-----BEGIN PALADIN MESSAGE-----";
 const END_MARKER: &str = "-----END PALADIN MESSAGE-----";
@@ -101,7 +101,7 @@ enum Phase {
 }
 
 /// Streaming armor decoder. Yields the decoded binary container; framing errors
-/// surface as `io::Error::other(SymError::MalformedHeader(..))`.
+/// surface as `io::Error::other(PalError::MalformedHeader(..))`.
 pub(crate) struct ArmorReader<R: Read> {
     inner: R,
     phase: Phase,
@@ -137,7 +137,7 @@ impl<R: Read> ArmorReader<R> {
                 return Ok(());
             }
             let mut block = [0u8; 4096];
-            let n = self.inner.read(&mut block).map_err(SymError::Io)?;
+            let n = self.inner.read(&mut block).map_err(PalError::Io)?;
             if n == 0 {
                 self.eof = true;
                 self.finish_eof()?;
@@ -153,7 +153,7 @@ impl<R: Read> ArmorReader<R> {
         for &b in bytes {
             if self.phase == Phase::Drain {
                 if !b.is_ascii_whitespace() {
-                    return Err(SymError::MalformedHeader(
+                    return Err(PalError::MalformedHeader(
                         "unexpected data after END marker",
                     ));
                 }
@@ -164,7 +164,7 @@ impl<R: Read> ArmorReader<R> {
                 self.line.clear();
             } else {
                 if self.line.len() >= MAX_LINE {
-                    return Err(SymError::MalformedHeader("armor line too long"));
+                    return Err(PalError::MalformedHeader("armor line too long"));
                 }
                 self.line.push(b);
             }
@@ -185,7 +185,7 @@ impl<R: Read> ArmorReader<R> {
                     self.phase = Phase::Body;
                     Ok(())
                 } else {
-                    Err(SymError::MalformedHeader(
+                    Err(PalError::MalformedHeader(
                         "expected the BEGIN PALADIN MESSAGE marker",
                     ))
                 }
@@ -193,7 +193,7 @@ impl<R: Read> ArmorReader<R> {
             Phase::Body => {
                 if trimmed.as_slice() == END_MARKER.as_bytes() {
                     if !self.carry.is_empty() {
-                        return Err(SymError::MalformedHeader(
+                        return Err(PalError::MalformedHeader(
                             "truncated base64 before END marker",
                         ));
                     }
@@ -220,7 +220,7 @@ impl<R: Read> ArmorReader<R> {
         if take > 0 {
             let decoded = STANDARD
                 .decode(&self.carry[..take])
-                .map_err(|_| SymError::MalformedHeader("invalid base64 in armor body"))?;
+                .map_err(|_| PalError::MalformedHeader("invalid base64 in armor body"))?;
             self.out.extend_from_slice(&decoded);
             self.carry.drain(..take);
         }
@@ -230,13 +230,13 @@ impl<R: Read> ArmorReader<R> {
     /// Validate framing at end of input, processing the trailing partial line.
     fn finish_eof(&mut self) -> Result<()> {
         match self.phase {
-            Phase::Header => Err(SymError::MalformedHeader("missing BEGIN marker")),
+            Phase::Header => Err(PalError::MalformedHeader("missing BEGIN marker")),
             Phase::Body => {
                 // Process the trailing partial line (it has no newline).
                 self.process_line()?;
                 self.line.clear();
                 if self.phase == Phase::Body {
-                    Err(SymError::MalformedHeader("missing END marker"))
+                    Err(PalError::MalformedHeader("missing END marker"))
                 } else {
                     Ok(())
                 }
@@ -296,7 +296,7 @@ pub(crate) fn auto_dearmor<R: Read>(mut input: R) -> Result<DearmorReader<R>> {
                 break byte[0] == b'-';
             }
             Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(SymError::Io(e)),
+            Err(e) => return Err(PalError::Io(e)),
         }
     };
     let combined = io::Cursor::new(peek).chain(input);
@@ -323,7 +323,7 @@ mod tests {
         let mut r = auto_dearmor(io::Cursor::new(armored.to_vec()))?;
         let mut out = Vec::new();
         r.read_to_end(&mut out)
-            .map_err(|e| crate::error::recover_symerror(e).unwrap_or_else(SymError::Io))?;
+            .map_err(|e| crate::error::recover_palerror(e).unwrap_or_else(PalError::Io))?;
         Ok(out)
     }
 
@@ -386,7 +386,7 @@ mod tests {
         let bad = format!("--- not the marker ---\n{armored}");
         assert!(matches!(
             dearmor(bad.as_bytes()),
-            Err(SymError::MalformedHeader(_))
+            Err(PalError::MalformedHeader(_))
         ));
     }
 
@@ -396,7 +396,7 @@ mod tests {
         let without_end = armored.replace(&format!("{END_MARKER}\n"), "");
         assert!(matches!(
             dearmor(without_end.as_bytes()),
-            Err(SymError::MalformedHeader(_))
+            Err(PalError::MalformedHeader(_))
         ));
     }
 
@@ -405,7 +405,7 @@ mod tests {
         let bad = format!("{BEGIN_MARKER}\n!!!!not base64!!!!\n{END_MARKER}\n");
         assert!(matches!(
             dearmor(bad.as_bytes()),
-            Err(SymError::MalformedHeader(_))
+            Err(PalError::MalformedHeader(_))
         ));
     }
 
@@ -415,7 +415,7 @@ mod tests {
         let trailing = format!("{armored}this should not be here\n");
         assert!(matches!(
             dearmor(trailing.as_bytes()),
-            Err(SymError::MalformedHeader(_))
+            Err(PalError::MalformedHeader(_))
         ));
     }
 
@@ -427,7 +427,7 @@ mod tests {
         bad.push_str(&format!("{END_MARKER}\n"));
         assert!(matches!(
             dearmor(bad.as_bytes()),
-            Err(SymError::MalformedHeader(_))
+            Err(PalError::MalformedHeader(_))
         ));
     }
 
@@ -444,7 +444,7 @@ mod tests {
         let mut r = auto_dearmor(io::Cursor::new(bytes))?;
         let mut out = Vec::new();
         r.read_to_end(&mut out)
-            .map_err(|e| crate::error::recover_symerror(e).unwrap_or_else(SymError::Io))?;
+            .map_err(|e| crate::error::recover_palerror(e).unwrap_or_else(PalError::Io))?;
         Ok(out)
     }
 

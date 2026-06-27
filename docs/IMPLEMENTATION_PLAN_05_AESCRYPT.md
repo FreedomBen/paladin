@@ -72,7 +72,7 @@ kind of metadata and that the default decrypt-output path can strip `.aes`.
   formats), which the front-ends render.
 - **Honest verification.** Verify HMAC-1 (key block) before producing any
   plaintext and HMAC-2 (body) before the output is finalized; map every failure
-  to the single [`SymError::Auth`] condition, exactly as the paladin path does
+  to the single [`PalError::Auth`] condition, exactly as the paladin path does
   (DESIGN §4.4).
 - **Same safety envelope.** Enforce the 64 GiB plaintext cap, bound every
   unauthenticated length before allocation, zeroize all key material.
@@ -221,7 +221,7 @@ dispatches:
 - `"PALADIN"` → the existing paladin path (`header::parse` + `stream::*`).
 - `"AES"` → the new `aescrypt` path; that parser reports
   `UnsupportedAesCryptVersion(version)` when the version byte is not supported.
-- anything else → [`SymError::BadMagic`] (exit 4), with the user-facing message
+- anything else → [`PalError::BadMagic`] (exit 4), with the user-facing message
   updated to say the input is neither a paladin nor AES Crypt file.
 
 Detection reads a small fixed prefix (≤ 8 bytes) and re-attaches it with
@@ -579,7 +579,7 @@ consume the new `Metadata`.
 | Inspect helpers | `crates/paladin-gtk/src/app.rs` (`inspect_path` ~L252, `open_and_inspect` ~L1034) | Return `Result<Metadata, …>` instead of `Result<Header, …>`; update the three call sites (decrypt prefill ~L238–240, info prefill ~L266–267, Run/Info ~L929–930). |
 | Decrypt prefill | `crates/paladin-gtk/src/app.rs` (`refresh_output`, ~L238–240) | Match `Metadata`: `Paladin(h)` → `default_decrypt_output(&input, &h)`; `AesCrypt(_)` → `default_aescrypt_output(&input)`. |
 | Info text | `crates/paladin-gtk/src/app.rs` (~L267, ~L930) | `info::header_text` → `info::metadata_text(&meta)`. |
-| Error messages | `crates/paladin-gtk/src/message.rs` | GTK renders `SymError` through its own message mapper, so update `BadMagic` to the format-neutral wording and add an explicit `UnsupportedAesCryptVersion` message/test instead of letting it fall through to the generic future-variant text. |
+| Error messages | `crates/paladin-gtk/src/message.rs` | GTK renders `PalError` through its own message mapper, so update `BadMagic` to the format-neutral wording and add an explicit `UnsupportedAesCryptVersion` message/test instead of letting it fall through to the generic future-variant text. |
 | Keyfile chooser | (no code change) | Core `InvalidOptions` is surfaced via the existing toast/error dialog; drag-and-drop of a `.aes` file decrypts normally. |
 
 **Tests:** the `info.rs` unit tests (pure, no display) gain AES Crypt cases

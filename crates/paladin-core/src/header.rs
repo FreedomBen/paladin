@@ -12,7 +12,7 @@
 use std::io::{self, Read};
 
 use crate::cipher::CipherId;
-use crate::error::{Result, SymError};
+use crate::error::{PalError, Result};
 use crate::kdf::{KdfId, KdfParams};
 
 /// File magic (DESIGN §5.2): ASCII "PALADIN" plus a NUL pad to a fixed 8 bytes.
@@ -166,13 +166,13 @@ pub(crate) fn parse<R: Read>(reader: &mut R) -> Result<Header> {
 
     read_field(reader, &mut h, 8)?;
     if &h[0..8] != MAGIC {
-        return Err(SymError::BadMagic);
+        return Err(PalError::BadMagic);
     }
 
     read_field(reader, &mut h, 1)?;
     let version = h[8];
     if version != VERSION {
-        return Err(SymError::UnsupportedVersion(version));
+        return Err(PalError::UnsupportedVersion(version));
     }
 
     // cipher_id, kdf_id, flags
@@ -181,7 +181,7 @@ pub(crate) fn parse<R: Read>(reader: &mut R) -> Result<Header> {
     let kdf = KdfId::from_id(h[10])?;
     let flags = h[11];
     if flags & !FLAGS_ALLOWED != 0 {
-        return Err(SymError::ReservedFlags(flags));
+        return Err(PalError::ReservedFlags(flags));
     }
 
     // kdf_p1, kdf_p2, kdf_p3
@@ -189,13 +189,13 @@ pub(crate) fn parse<R: Read>(reader: &mut R) -> Result<Header> {
     let p1 = u32::from_be_bytes(h[12..16].try_into().unwrap());
     let p2 = u32::from_be_bytes(h[16..20].try_into().unwrap());
     let p3 = u32::from_be_bytes(h[20..24].try_into().unwrap());
-    let kdf_params = KdfParams::from_words(kdf, p1, p2, p3).map_err(SymError::MalformedHeader)?;
+    let kdf_params = KdfParams::from_words(kdf, p1, p2, p3).map_err(PalError::MalformedHeader)?;
 
     // salt_len then salt
     read_field(reader, &mut h, 1)?;
     let salt_len = usize::from(h[24]);
     if !SALT_LEN.contains(&salt_len) {
-        return Err(SymError::MalformedHeader("salt_len out of range (16..=64)"));
+        return Err(PalError::MalformedHeader("salt_len out of range (16..=64)"));
     }
     read_field(reader, &mut h, salt_len)?;
     let salt = h[25..25 + salt_len].to_vec();
@@ -205,7 +205,7 @@ pub(crate) fn parse<R: Read>(reader: &mut R) -> Result<Header> {
     read_field(reader, &mut h, 1)?;
     let nonce_prefix_len = usize::from(h[npl_off]);
     if nonce_prefix_len != NONCE_PREFIX_LEN {
-        return Err(SymError::MalformedHeader("nonce_prefix_len must be 7"));
+        return Err(PalError::MalformedHeader("nonce_prefix_len must be 7"));
     }
     let np_off = npl_off + 1;
     read_field(reader, &mut h, nonce_prefix_len)?;
@@ -217,7 +217,7 @@ pub(crate) fn parse<R: Read>(reader: &mut R) -> Result<Header> {
     read_field(reader, &mut h, 4)?;
     let chunk_size = u32::from_be_bytes(h[cs_off..cs_off + 4].try_into().unwrap());
     if !CHUNK_SIZE.contains(&chunk_size) {
-        return Err(SymError::MalformedHeader(
+        return Err(PalError::MalformedHeader(
             "chunk_size out of range (4096..=16777216)",
         ));
     }
@@ -230,12 +230,12 @@ pub(crate) fn parse<R: Read>(reader: &mut R) -> Result<Header> {
             h[nl_off..nl_off + 2].try_into().unwrap(),
         ));
         if !NAME_LEN.contains(&name_len) {
-            return Err(SymError::MalformedHeader("name_len out of range (1..=255)"));
+            return Err(PalError::MalformedHeader("name_len out of range (1..=255)"));
         }
         let n_off = nl_off + 2;
         read_field(reader, &mut h, name_len)?;
         let name = std::str::from_utf8(&h[n_off..n_off + name_len])
-            .map_err(|_| SymError::MalformedHeader("stored name is not valid UTF-8"))?;
+            .map_err(|_| PalError::MalformedHeader("stored name is not valid UTF-8"))?;
         let status = if is_safe_basename(name) {
             NameStatus::Present
         } else {
@@ -261,20 +261,20 @@ pub(crate) fn parse<R: Read>(reader: &mut R) -> Result<Header> {
 }
 
 /// Read exactly `n` bytes from `reader`, appending them to `sink`. A short read
-/// (truncated header) becomes [`SymError::MalformedHeader`]; a framing error
+/// (truncated header) becomes [`PalError::MalformedHeader`]; a framing error
 /// from the armor layer is recovered with its original variant; other I/O errors
-/// propagate as [`SymError::Io`].
+/// propagate as [`PalError::Io`].
 fn read_field<R: Read>(reader: &mut R, sink: &mut Vec<u8>, n: usize) -> Result<()> {
     let start = sink.len();
     sink.resize(start + n, 0);
     reader
         .read_exact(&mut sink[start..])
-        .map_err(|e| match crate::error::recover_symerror(e) {
+        .map_err(|e| match crate::error::recover_palerror(e) {
             Ok(sym) => sym,
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-                SymError::MalformedHeader("unexpected end of input before header was complete")
+                PalError::MalformedHeader("unexpected end of input before header was complete")
             }
-            Err(e) => SymError::Io(e),
+            Err(e) => PalError::Io(e),
         })
 }
 
@@ -338,7 +338,7 @@ mod tests {
     fn bad_magic_is_rejected() {
         let mut bytes = default_bytes();
         bytes[0] = b'X';
-        assert!(matches!(parse_bytes(&bytes), Err(SymError::BadMagic)));
+        assert!(matches!(parse_bytes(&bytes), Err(PalError::BadMagic)));
     }
 
     #[test]
@@ -347,7 +347,7 @@ mod tests {
         bytes[8] = 0x02;
         assert!(matches!(
             parse_bytes(&bytes),
-            Err(SymError::UnsupportedVersion(0x02))
+            Err(PalError::UnsupportedVersion(0x02))
         ));
     }
 
@@ -357,12 +357,12 @@ mod tests {
         c[9] = 0x09;
         assert!(matches!(
             parse_bytes(&c),
-            Err(SymError::UnknownCipher(0x09))
+            Err(PalError::UnknownCipher(0x09))
         ));
 
         let mut k = default_bytes();
         k[10] = 0x09;
-        assert!(matches!(parse_bytes(&k), Err(SymError::UnknownKdf(0x09))));
+        assert!(matches!(parse_bytes(&k), Err(PalError::UnknownKdf(0x09))));
     }
 
     #[test]
@@ -372,7 +372,7 @@ mod tests {
             bytes[11] |= bit;
             assert!(matches!(
                 parse_bytes(&bytes),
-                Err(SymError::ReservedFlags(_))
+                Err(PalError::ReservedFlags(_))
             ));
         }
     }
@@ -384,7 +384,7 @@ mod tests {
             let mut bytes = default_bytes();
             bytes[24] = bad_salt_len;
             assert!(
-                matches!(parse_bytes(&bytes), Err(SymError::MalformedHeader(_))),
+                matches!(parse_bytes(&bytes), Err(PalError::MalformedHeader(_))),
                 "salt_len {bad_salt_len}"
             );
         }
@@ -393,7 +393,7 @@ mod tests {
         np[41] = 8;
         assert!(matches!(
             parse_bytes(&np),
-            Err(SymError::MalformedHeader(_))
+            Err(PalError::MalformedHeader(_))
         ));
     }
 
@@ -404,7 +404,7 @@ mod tests {
             let mut bytes = default_bytes();
             bytes[49..53].copy_from_slice(&bad.to_be_bytes());
             assert!(
-                matches!(parse_bytes(&bytes), Err(SymError::MalformedHeader(_))),
+                matches!(parse_bytes(&bytes), Err(PalError::MalformedHeader(_))),
                 "chunk_size {bad}"
             );
         }
@@ -417,7 +417,7 @@ mod tests {
         bytes[12..16].copy_from_slice(&100u32.to_be_bytes());
         assert!(matches!(
             parse_bytes(&bytes),
-            Err(SymError::MalformedHeader(_))
+            Err(PalError::MalformedHeader(_))
         ));
     }
 
@@ -440,7 +440,7 @@ mod tests {
         bytes[n_off + 1] = 0xFE;
         assert!(matches!(
             parse_bytes(&bytes),
-            Err(SymError::MalformedHeader(_))
+            Err(PalError::MalformedHeader(_))
         ));
     }
 
@@ -483,7 +483,7 @@ mod tests {
         // Every proper prefix that stops mid-header must be MalformedHeader.
         for cut in [0usize, 3, 8, 9, 12, 24, 30, 49, full.len() - 1] {
             assert!(
-                matches!(parse_bytes(&full[..cut]), Err(SymError::MalformedHeader(_))),
+                matches!(parse_bytes(&full[..cut]), Err(PalError::MalformedHeader(_))),
                 "prefix len {cut}"
             );
         }

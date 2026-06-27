@@ -10,14 +10,14 @@
 //! cipher/KDF/params/filename to the ciphertext; later chunks use empty AAD. The
 //! per-chunk counter prevents reordering and the final flag prevents
 //! truncation/appending. A failed tag, a structurally short body, or a
-//! reorder/truncate/append are all reported as the single [`SymError::Auth`]
+//! reorder/truncate/append are all reported as the single [`PalError::Auth`]
 //! condition (DESIGN §4.4, §5.5).
 
 use std::io::{self, Read, Write};
 use std::ops::ControlFlow;
 
 use crate::cipher::{Cipher, CipherId};
-use crate::error::{Result, SymError};
+use crate::error::{PalError, Result};
 use crate::header::{self, CHUNK_SIZE};
 use crate::kdf::{KdfId, KdfParams};
 use crate::secret::Secret;
@@ -40,7 +40,7 @@ pub struct Progress {
 }
 
 /// Progress/cancellation callback. Returning [`ControlFlow::Break`] aborts the
-/// operation with [`SymError::Canceled`].
+/// operation with [`PalError::Canceled`].
 pub type OnProgress<'a> = dyn FnMut(Progress) -> ControlFlow<()> + 'a;
 
 /// Options for [`encrypt`]. Construct via [`Default`] for the DESIGN §12 secure
@@ -70,25 +70,25 @@ impl Default for EncryptOptions {
 
 impl EncryptOptions {
     /// Validate the options before any output is written (DESIGN §5.4). Any
-    /// problem is [`SymError::InvalidOptions`] (exit 2), so programmatic options
+    /// problem is [`PalError::InvalidOptions`] (exit 2), so programmatic options
     /// can never produce a file that fails its own read validation.
     pub(crate) fn validate(&self) -> Result<()> {
         if self.kdf_params.kdf_id() != self.kdf {
-            return Err(SymError::InvalidOptions(
+            return Err(PalError::InvalidOptions(
                 "kdf_params variant does not match kdf",
             ));
         }
         self.kdf_params
             .validate()
-            .map_err(SymError::InvalidOptions)?;
+            .map_err(PalError::InvalidOptions)?;
         if !CHUNK_SIZE.contains(&self.chunk_size) {
-            return Err(SymError::InvalidOptions(
+            return Err(PalError::InvalidOptions(
                 "chunk_size out of range (4096..=16777216)",
             ));
         }
         if let Some(name) = &self.filename {
             if !header::is_safe_basename(name) {
-                return Err(SymError::InvalidOptions(
+                return Err(PalError::InvalidOptions(
                     "stored filename is not a safe basename",
                 ));
             }
@@ -101,7 +101,7 @@ impl EncryptOptions {
 fn report(on_progress: &mut OnProgress<'_>, done: u64, total: Option<u64>) -> Result<()> {
     match on_progress(Progress { done, total }) {
         ControlFlow::Continue(()) => Ok(()),
-        ControlFlow::Break(()) => Err(SymError::Canceled),
+        ControlFlow::Break(()) => Err(PalError::Canceled),
     }
 }
 
@@ -117,7 +117,7 @@ fn make_nonce(prefix: &[u8; NONCE_PREFIX_LEN], counter: u32, final_flag: bool) -
 /// Fill `buf` with OS randomness. An RNG failure makes safe encryption
 /// impossible, so it is surfaced as a general error.
 fn fill_random(buf: &mut [u8]) -> Result<()> {
-    getrandom::fill(buf).map_err(|_| SymError::Io(io::Error::other("OS RNG failure")))
+    getrandom::fill(buf).map_err(|_| PalError::Io(io::Error::other("OS RNG failure")))
 }
 
 /// Read up to `max` bytes, returning fewer only at end of input. `Interrupted`
@@ -133,9 +133,9 @@ fn read_up_to<R: Read>(reader: &mut R, max: usize) -> Result<Vec<u8>> {
             // Recover an armor framing error (e.g. MalformedHeader) wrapped by
             // the reader; otherwise it is a genuine I/O error.
             Err(e) => {
-                return Err(match crate::error::recover_symerror(e) {
+                return Err(match crate::error::recover_palerror(e) {
                     Ok(sym) => sym,
-                    Err(e) => SymError::Io(e),
+                    Err(e) => PalError::Io(e),
                 })
             }
         }
@@ -208,7 +208,7 @@ fn encrypt_deterministic<R: Read, W: Write>(
     let key = opts.kdf_params.derive_key(&secret.kdf_input(), salt)?;
     report(on_progress, 0, input_len)?; // cancel after key derivation (output still empty)
 
-    output.write_all(&header_bytes).map_err(SymError::Io)?;
+    output.write_all(&header_bytes).map_err(PalError::Io)?;
 
     let cipher = Cipher::new(opts.cipher, &key);
     let chunk_size = opts.chunk_size as usize;
@@ -222,23 +222,23 @@ fn encrypt_deterministic<R: Read, W: Write>(
 
         done += cur.len() as u64;
         if done > max_plaintext {
-            return Err(SymError::InputTooLarge);
+            return Err(PalError::InputTooLarge);
         }
 
         let nonce = make_nonce(nonce_prefix, counter, is_final);
         let aad: &[u8] = if counter == 0 { &header_bytes } else { &[] };
         let sealed = cipher.seal(&nonce, aad, &cur)?;
-        output.write_all(&sealed).map_err(SymError::Io)?;
+        output.write_all(&sealed).map_err(PalError::Io)?;
         report(on_progress, done, input_len)?;
 
         if is_final {
             break;
         }
         // Refuse a stream needing more than 2^32 chunks (DESIGN §4.3).
-        counter = counter.checked_add(1).ok_or(SymError::InputTooLarge)?;
+        counter = counter.checked_add(1).ok_or(PalError::InputTooLarge)?;
         cur = next;
     }
-    output.flush().map_err(SymError::Io)?;
+    output.flush().map_err(PalError::Io)?;
     Ok(())
 }
 
@@ -296,14 +296,14 @@ fn decrypt_impl<R: Read, W: Write>(
     if cur.is_empty() {
         // No body after a complete header (DESIGN §5.5): an auth failure,
         // indistinguishable from truncation.
-        return Err(SymError::Auth);
+        return Err(PalError::Auth);
     }
     loop {
         let next = read_up_to(&mut input, on_disk_max)?;
         let is_final = next.is_empty();
 
         if cur.len() < TAG_LEN {
-            return Err(SymError::Auth); // trailing fragment shorter than a tag
+            return Err(PalError::Auth); // trailing fragment shorter than a tag
         }
 
         let nonce = make_nonce(&header.nonce_prefix, counter, is_final);
@@ -312,9 +312,9 @@ fn decrypt_impl<R: Read, W: Write>(
 
         plaintext_len += plaintext.len() as u64;
         if plaintext_len > max_plaintext {
-            return Err(SymError::InputTooLarge);
+            return Err(PalError::InputTooLarge);
         }
-        output.write_all(&plaintext).map_err(SymError::Io)?;
+        output.write_all(&plaintext).map_err(PalError::Io)?;
 
         input_done += cur.len() as u64;
         report(on_progress, input_done, input_len)?;
@@ -324,10 +324,10 @@ fn decrypt_impl<R: Read, W: Write>(
         }
         // A stream exceeding 2^32 chunks is rejected as an auth failure on
         // decrypt rather than wrapping the counter (DESIGN §4.3).
-        counter = counter.checked_add(1).ok_or(SymError::Auth)?;
+        counter = counter.checked_add(1).ok_or(PalError::Auth)?;
         cur = next;
     }
-    output.flush().map_err(SymError::Io)?;
+    output.flush().map_err(PalError::Io)?;
     Ok(())
 }
 
@@ -431,7 +431,7 @@ mod tests {
         assert_eq!(dec(&ct).unwrap(), b"");
         // Dropping the 16-byte body leaves a header with no body -> Auth.
         let header_only = &ct[..ct.len() - TAG_LEN];
-        assert!(matches!(dec(header_only), Err(SymError::Auth)));
+        assert!(matches!(dec(header_only), Err(PalError::Auth)));
     }
 
     #[test]
@@ -443,7 +443,7 @@ mod tests {
         let mut cb = noop();
         assert!(matches!(
             encrypt(b"x".as_ref(), &mut out, &secret(), &opts, None, &mut cb),
-            Err(SymError::InvalidOptions(_))
+            Err(PalError::InvalidOptions(_))
         ));
         assert!(out.is_empty());
 
@@ -460,7 +460,7 @@ mod tests {
                 None,
                 &mut cb
             ),
-            Err(SymError::InvalidOptions(_))
+            Err(PalError::InvalidOptions(_))
         ));
 
         // unsafe stored filename.
@@ -476,7 +476,7 @@ mod tests {
                 None,
                 &mut cb
             ),
-            Err(SymError::InvalidOptions(_))
+            Err(PalError::InvalidOptions(_))
         ));
     }
 
@@ -486,7 +486,7 @@ mod tests {
         let mut t = ct.clone();
         let last = t.len() - 1;
         t[last] ^= 0x01;
-        assert!(matches!(dec(&t), Err(SymError::Auth)));
+        assert!(matches!(dec(&t), Err(PalError::Auth)));
     }
 
     #[test]
@@ -497,7 +497,7 @@ mod tests {
         let mut t = ct.clone();
         assert_eq!(t[9], 0x01);
         t[9] = 0x02;
-        assert!(matches!(dec(&t), Err(SymError::Auth)));
+        assert!(matches!(dec(&t), Err(PalError::Auth)));
     }
 
     #[test]
@@ -505,7 +505,7 @@ mod tests {
         let ct = enc(b"payload", &fast_opts(CipherId::Aes256Gcm));
         let mut t = ct.clone();
         t[9] = 0x7f; // unknown cipher id
-        assert!(matches!(dec(&t), Err(SymError::UnknownCipher(0x7f))));
+        assert!(matches!(dec(&t), Err(PalError::UnknownCipher(0x7f))));
     }
 
     #[test]
@@ -517,7 +517,7 @@ mod tests {
         let wrong_pw = Secret::new(b"wrong password", None).unwrap();
         assert!(matches!(
             decrypt(ct.as_slice(), &mut out, &wrong_pw, None, &mut cb),
-            Err(SymError::Auth)
+            Err(PalError::Auth)
         ));
 
         // Encrypted with a keyfile; decrypting without it fails.
@@ -537,7 +537,7 @@ mod tests {
         let mut cb = noop();
         assert!(matches!(
             decrypt(kf_ct.as_slice(), &mut Vec::new(), &no_kf, None, &mut cb),
-            Err(SymError::Auth)
+            Err(PalError::Auth)
         ));
     }
 
@@ -548,11 +548,11 @@ mod tests {
             &fast_opts(CipherId::Aes256Gcm),
         );
         // Drop the final byte (corrupts the last tag).
-        assert!(matches!(dec(&ct[..ct.len() - 1]), Err(SymError::Auth)));
+        assert!(matches!(dec(&ct[..ct.len() - 1]), Err(PalError::Auth)));
         // Drop the whole final tag region down to a sub-tag fragment.
         assert!(matches!(
             dec(&ct[..ct.len() - TAG_LEN + 1]),
-            Err(SymError::Auth)
+            Err(PalError::Auth)
         ));
     }
 
@@ -561,7 +561,7 @@ mod tests {
         let ct = enc(b"payload", &fast_opts(CipherId::Aes256Gcm));
         let mut t = ct.clone();
         t.extend_from_slice(&[0u8; 32]); // bytes after the genuine final chunk
-        assert!(matches!(dec(&t), Err(SymError::Auth)));
+        assert!(matches!(dec(&t), Err(PalError::Auth)));
     }
 
     #[test]
@@ -579,14 +579,14 @@ mod tests {
         let c1: Vec<u8> = ct[c1_start..c1_start + chunk].to_vec();
         t[c0_start..c0_start + chunk].copy_from_slice(&c1);
         t[c1_start..c1_start + chunk].copy_from_slice(&c0);
-        assert!(matches!(dec(&t), Err(SymError::Auth)));
+        assert!(matches!(dec(&t), Err(PalError::Auth)));
     }
 
     #[test]
     fn dropping_the_body_fails_auth() {
         let ct = enc(b"", &fast_opts(CipherId::Aes256Gcm));
         let header_only = &ct[..ct.len() - TAG_LEN];
-        assert!(matches!(dec(header_only), Err(SymError::Auth)));
+        assert!(matches!(dec(header_only), Err(PalError::Auth)));
     }
 
     #[test]
@@ -596,7 +596,7 @@ mod tests {
         let mut out = Vec::new();
         assert!(matches!(
             encrypt(b"data".as_ref(), &mut out, &secret(), &opts, None, &mut cb),
-            Err(SymError::Canceled)
+            Err(PalError::Canceled)
         ));
         // Cancelled before the key derivation, so nothing was written.
         assert!(out.is_empty());
@@ -619,7 +619,7 @@ mod tests {
         let mut out = Vec::new();
         assert!(matches!(
             encrypt(data.as_slice(), &mut out, &secret(), &opts, None, &mut cb),
-            Err(SymError::Canceled)
+            Err(PalError::Canceled)
         ));
     }
 
@@ -642,7 +642,7 @@ mod tests {
             &[0u8; NONCE_PREFIX_LEN],
             0,
         );
-        assert!(matches!(err, Err(SymError::InputTooLarge)));
+        assert!(matches!(err, Err(PalError::InputTooLarge)));
     }
 
     #[test]
@@ -653,7 +653,7 @@ mod tests {
         let mut out = Vec::new();
         let mut cb = noop();
         let err = decrypt_impl(ct.as_slice(), &mut out, &secret(), None, &mut cb, 100);
-        assert!(matches!(err, Err(SymError::InputTooLarge)));
+        assert!(matches!(err, Err(PalError::InputTooLarge)));
     }
 
     #[test]
@@ -866,7 +866,7 @@ mod tests {
         let mut out = Vec::new();
         assert!(matches!(
             decrypt(ct.as_slice(), &mut out, &secret(), None, &mut cb),
-            Err(SymError::Canceled)
+            Err(PalError::Canceled)
         ));
     }
 
@@ -888,7 +888,7 @@ mod tests {
         let mut out = Vec::new();
         assert!(matches!(
             decrypt(ct.as_slice(), &mut out, &secret(), None, &mut cb),
-            Err(SymError::Canceled)
+            Err(PalError::Canceled)
         ));
     }
 
@@ -898,7 +898,7 @@ mod tests {
         let mut cb = |_: Progress| ControlFlow::Break(());
         assert!(matches!(
             verify(ct.as_slice(), &secret(), None, &mut cb),
-            Err(SymError::Canceled)
+            Err(PalError::Canceled)
         ));
     }
 
@@ -958,7 +958,7 @@ mod tests {
     }
 
     /// A writer that fails every write, so the header `write_all` surfaces the
-    /// I/O error as [`SymError::Io`] (DESIGN §5.5).
+    /// I/O error as [`PalError::Io`] (DESIGN §5.5).
     struct FailingWriter;
 
     impl Write for FailingWriter {
@@ -983,7 +983,7 @@ mod tests {
                 None,
                 &mut cb
             ),
-            Err(SymError::Io(_))
+            Err(PalError::Io(_))
         ));
     }
 
@@ -1014,8 +1014,8 @@ mod tests {
         let ct = enc(b"payload that spans into the body", &opts);
         // Land the failure one byte into the body so it hits read_up_to's
         // non-Interrupted error arm rather than the header parse path. A plain
-        // BrokenPipe is not a wrapped SymError, so recover_symerror returns it
-        // and it maps to SymError::Io.
+        // BrokenPipe is not a wrapped PalError, so recover_palerror returns it
+        // and it maps to PalError::Io.
         let header_len = header::parse(&mut io::Cursor::new(ct.clone()))
             .unwrap()
             .aad()
@@ -1029,7 +1029,7 @@ mod tests {
         let mut cb = noop();
         assert!(matches!(
             decrypt(reader, &mut out, &secret(), None, &mut cb),
-            Err(SymError::Io(_))
+            Err(PalError::Io(_))
         ));
     }
 
@@ -1091,7 +1091,7 @@ mod tests {
             &[0u8; NONCE_PREFIX_LEN],
             u32::MAX,
         );
-        assert!(matches!(err, Err(SymError::InputTooLarge)));
+        assert!(matches!(err, Err(PalError::InputTooLarge)));
     }
 
     #[test]

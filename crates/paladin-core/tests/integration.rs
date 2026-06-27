@@ -9,7 +9,7 @@ use std::path::Path;
 use paladin_core::{
     decrypt, default_aescrypt_output, default_decrypt_output, default_encrypt_output, encrypt,
     inspect, verify, CipherId, EncryptOptions, Header, KdfId, KdfParams, Metadata, NameStatus,
-    Progress, Secret, SymError,
+    PalError, Progress, Secret,
 };
 
 fn noop() -> impl FnMut(Progress) -> ControlFlow<()> {
@@ -71,7 +71,7 @@ fn do_encrypt(data: &[u8], opts: &EncryptOptions) -> Vec<u8> {
     out
 }
 
-fn do_decrypt(ct: &[u8]) -> Result<Vec<u8>, SymError> {
+fn do_decrypt(ct: &[u8]) -> Result<Vec<u8>, PalError> {
     let mut out = Vec::new();
     let mut cb = noop();
     decrypt(ct, &mut out, &secret(), None, &mut cb)?;
@@ -140,7 +140,7 @@ fn verify_accepts_valid_and_rejects_tampered_and_wrong_password() {
     let mut cb = noop();
     assert!(matches!(
         verify(tampered.as_slice(), &secret(), None, &mut cb),
-        Err(SymError::Auth)
+        Err(PalError::Auth)
     ));
 
     // Wrong password.
@@ -148,7 +148,7 @@ fn verify_accepts_valid_and_rejects_tampered_and_wrong_password() {
     let mut cb = noop();
     assert!(matches!(
         verify(ct.as_slice(), &wrong, None, &mut cb),
-        Err(SymError::Auth)
+        Err(PalError::Auth)
     ));
 }
 
@@ -163,7 +163,7 @@ fn tampering_with_an_armored_file_fails_auth() {
     let mut t = ct.clone();
     let mid = t.len() / 2;
     t[mid] = if t[mid] == b'A' { b'B' } else { b'A' };
-    assert!(matches!(do_decrypt(&t), Err(SymError::Auth)));
+    assert!(matches!(do_decrypt(&t), Err(PalError::Auth)));
 }
 
 #[test]
@@ -210,7 +210,7 @@ fn unknown_cipher_id_is_unsupported_format() {
     ct[9] = 0x7f;
     assert!(matches!(
         do_decrypt(&ct),
-        Err(SymError::UnknownCipher(0x7f))
+        Err(PalError::UnknownCipher(0x7f))
     ));
 }
 
@@ -241,7 +241,7 @@ fn keyfile_round_trips_and_sets_the_hint() {
     let mut cb = noop();
     assert!(matches!(
         decrypt(ct.as_slice(), &mut Vec::new(), &no_kf, None, &mut cb),
-        Err(SymError::Auth)
+        Err(PalError::Auth)
     ));
 }
 
@@ -280,6 +280,6 @@ fn aescrypt_file_decrypts_inspects_and_strips_suffix() {
     let mut cb = noop();
     assert!(matches!(
         decrypt(AESCRYPT_V2, &mut Vec::new(), &kf, None, &mut cb),
-        Err(SymError::InvalidOptions(_))
+        Err(PalError::InvalidOptions(_))
     ));
 }

@@ -1,24 +1,24 @@
 //! Error type for `paladin-core`.
 //!
 //! Variants correspond one-to-one with the conditions DESIGN §6.6 enumerates.
-//! The core never decides process exit codes; the `SymError` → exit-code mapping
+//! The core never decides process exit codes; the `PalError` → exit-code mapping
 //! lives in `paladin-common` so the CLI and TUI stay identical.
 
 use std::io;
 use thiserror::Error;
 
 /// Convenience alias for results returned by the core.
-pub type Result<T> = std::result::Result<T, SymError>;
+pub type Result<T> = std::result::Result<T, PalError>;
 
 /// Everything that can go wrong inside the core.
 ///
-/// A failed authentication tag is reported as the single [`SymError::Auth`]
+/// A failed authentication tag is reported as the single [`PalError::Auth`]
 /// condition: wrong password and a corrupted/tampered/truncated file are
 /// cryptographically indistinguishable with AEAD and are intentionally
 /// conflated (DESIGN §4.4).
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum SymError {
+pub enum PalError {
     /// Authentication failed: wrong password, or a corrupted/tampered/truncated
     /// file. Maps to exit code 3. The two causes are not distinguished.
     #[error("authentication failed: wrong password or corrupted/tampered file")]
@@ -81,13 +81,13 @@ pub enum SymError {
     Io(#[from] io::Error),
 }
 
-/// Recover a [`SymError`] that the armor layer wrapped in an `io::Error` (via
+/// Recover a [`PalError`] that the armor layer wrapped in an `io::Error` (via
 /// `io::Error::other`) so it can surface through the `Read` interface with its
 /// original variant and exit code. Returns the original `io::Error` untouched
-/// when it does not carry a `SymError`.
-pub(crate) fn recover_symerror(e: io::Error) -> std::result::Result<SymError, io::Error> {
-    if e.get_ref().is_some_and(|inner| inner.is::<SymError>()) {
-        Ok(*e.into_inner().unwrap().downcast::<SymError>().unwrap())
+/// when it does not carry a `PalError`.
+pub(crate) fn recover_palerror(e: io::Error) -> std::result::Result<PalError, io::Error> {
+    if e.get_ref().is_some_and(|inner| inner.is::<PalError>()) {
+        Ok(*e.into_inner().unwrap().downcast::<PalError>().unwrap())
     } else {
         Err(e)
     }
@@ -100,8 +100,8 @@ mod tests {
     #[test]
     fn io_errors_convert_via_from() {
         let io_err = io::Error::new(io::ErrorKind::UnexpectedEof, "boom");
-        let err: SymError = io_err.into();
-        assert!(matches!(err, SymError::Io(_)));
+        let err: PalError = io_err.into();
+        assert!(matches!(err, PalError::Io(_)));
     }
 
     #[test]
@@ -110,13 +110,13 @@ mod tests {
             Err(io::Error::from(io::ErrorKind::PermissionDenied))?;
             Ok(())
         }
-        assert!(matches!(fails(), Err(SymError::Io(_))));
+        assert!(matches!(fails(), Err(PalError::Io(_))));
     }
 
     #[test]
     fn auth_message_does_not_leak_which_cause() {
         // Wrong password and tampering must read the same (DESIGN §4.4).
-        let msg = SymError::Auth.to_string();
+        let msg = PalError::Auth.to_string();
         assert!(msg.contains("wrong password"));
         assert!(msg.contains("corrupted/tampered"));
     }
@@ -124,11 +124,11 @@ mod tests {
     #[test]
     fn malformed_and_invalid_carry_their_reason() {
         assert_eq!(
-            SymError::MalformedHeader("salt_len out of range").to_string(),
+            PalError::MalformedHeader("salt_len out of range").to_string(),
             "malformed header: salt_len out of range"
         );
         assert_eq!(
-            SymError::InvalidOptions("empty secret").to_string(),
+            PalError::InvalidOptions("empty secret").to_string(),
             "invalid options: empty secret"
         );
     }
@@ -136,15 +136,15 @@ mod tests {
     #[test]
     fn unknown_ids_render_as_two_digit_hex() {
         assert_eq!(
-            SymError::UnknownCipher(0x07).to_string(),
+            PalError::UnknownCipher(0x07).to_string(),
             "unknown cipher id: 0x07"
         );
         assert_eq!(
-            SymError::UnsupportedVersion(0x99).to_string(),
+            PalError::UnsupportedVersion(0x99).to_string(),
             "unsupported paladin version: 0x99"
         );
         assert_eq!(
-            SymError::UnsupportedAesCryptVersion(0x03).to_string(),
+            PalError::UnsupportedAesCryptVersion(0x03).to_string(),
             "unsupported AES Crypt version: 0x03"
         );
     }
@@ -153,7 +153,7 @@ mod tests {
     fn bad_magic_message_is_format_neutral() {
         // Foreign inputs are now classified after checking both magics, so the
         // message must name neither format as the sole expectation.
-        let msg = SymError::BadMagic.to_string();
+        let msg = PalError::BadMagic.to_string();
         assert!(msg.contains("paladin"));
         assert!(msg.contains("AES Crypt"));
     }
@@ -161,6 +161,6 @@ mod tests {
     #[test]
     fn implements_std_error() {
         fn assert_error<E: std::error::Error>() {}
-        assert_error::<SymError>();
+        assert_error::<PalError>();
     }
 }

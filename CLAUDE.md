@@ -149,7 +149,7 @@ moved into the worker inside a zeroizing buffer.
 - **Security-affecting changes:** state the implications and confirm before
   implementing, and add tests that verify the integrity property.
 - Exit codes: 0 ok · 1 general/IO · 2 usage · 3 auth failure · 4 unsupported
-  format/version · 130 canceled — mapped from `SymError` in `paladin-common`,
+  format/version · 130 canceled — mapped from `PalError` in `paladin-common`,
   never classified in the front-ends.
 - Dependency versions are pinned via `cargo add` at scaffolding time.
 
