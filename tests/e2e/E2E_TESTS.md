@@ -175,6 +175,26 @@ so future changes can't silently break old files. Goldens live in
 - [x] Deliberate regeneration step documented (`golden/README.md`); the script
   refuses to overwrite without `--force` (never auto-overwrites goldens).
 
+## interop_fixtures — `cases/interop_fixtures_test.rb` ✅
+
+Committed **full-size** (~294 KiB) ciphertexts of `tests/fixtures/LOREM_IPSUM.txt`,
+minted by real tool runs with the fixed public password `password`:
+`LOREM_IPSUM.txt.aes` by the genuine AES Crypt CLI (`aescrypt 3.16.1`, Stream
+Format 2) and `LOREM_IPSUM.txt.paladin` by the paladin CLI at shipped defaults
+(aes-256-gcm, argon2id `memory=65536,time=3,parallelism=1`). Provenance and
+regeneration: `tests/fixtures/README.md`.
+
+- [x] `.aes` decrypts byte-for-byte to `LOREM_IPSUM.txt` — AES Crypt interop at
+  scale (the committed Rust `.aes` fixtures are ≤ 3000 B; this is thousands of
+  CBC blocks plus the final padding/HMAC path, through the real binary).
+- [x] `.paladin` decrypts byte-for-byte — a multi-chunk body at the shipped
+  DEFAULT KDF costs (the goldens use reduced costs and a small plaintext).
+- [x] `--info` on each is **byte-exact** (no password): locks the aescrypt
+  `created_by`/`extensions` fields and the defaults recorded in the container.
+- [x] `--verify` accepts both fixtures with the fixed password.
+- [x] Wrong password → exit 3 for **both** formats (unified auth failure), and
+  no output file remains.
+
 ## cross-cutting — `cases/misc_test.rb` ✅
 
 - [x] ⚠ **Header is authenticated / no downgrade:** swap a structurally-valid
