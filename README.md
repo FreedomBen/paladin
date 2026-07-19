@@ -1,5 +1,7 @@
 # paladin
 
+[![CI](https://github.com/FreedomBen/paladin/actions/workflows/ci.yml/badge.svg)](https://github.com/FreedomBen/paladin/actions/workflows/ci.yml)
+
 A simple, safe symmetric file-encryption tool: three thin front-ends over one
 shared core. The default cipher is **AES-256-GCM** and the default KDF is
 **Argon2id**. Encrypted files begin with a self-describing, authenticated header,
@@ -220,6 +222,16 @@ make package-rpm    # only the .rpm packages
 architecture with `ARCH=` (nfpm names — `amd64`, `arm64`) and the output
 directory with `DISTDIR=`; the nfpm configs live in `packaging/`. Building the
 `paladin-gtk` package needs the GTK build dependencies from step 2.
+
+The same packages are also built in CI. Every push and pull request runs the
+CI workflow (`.github/workflows/ci.yml`), which runs the full test gate and
+uploads the `.deb`/`.rpm` files as a workflow artifact. Pushing a `v*` tag
+that matches the workspace version (e.g. `v0.1.0`) triggers the release
+workflow (`.github/workflows/release.yml`), which re-runs the tests, rebuilds
+the packages, and attaches them — together with a `SHA256SUMS` file — to a
+GitHub release. So for tagged versions you can skip the local toolchain
+entirely and grab the packages from the
+[releases page](https://github.com/FreedomBen/paladin/releases).
 
 ## Command-line usage
 

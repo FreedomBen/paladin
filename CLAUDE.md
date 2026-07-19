@@ -70,6 +70,18 @@ graphical session is still pending (see `docs/IMPLEMENTATION_PLAN_04_GTK.md`).
 Gotcha: the CLI lives in package **`paladin-cli`** but produces a binary named
 **`paladin`** — use `-p paladin-cli` (or `--bin paladin`) to run it.
 
+## Continuous integration
+
+GitHub Actions lives in `.github/workflows/`. `ci.yml` runs on every push to
+`main` and every pull request: `make ci` (fmt-check, lint, test), the e2e suite
+(`make e2e`), and a packaging job that builds the `.deb`/`.rpm` files with nfpm
+and uploads them as a workflow artifact. `release.yml` runs on `v*` tags — the
+tag must equal `v` + the workspace `version` in `Cargo.toml` or the job fails —
+and publishes the packages plus a `SHA256SUMS` file to a GitHub release.
+Third-party actions are pinned to commit SHAs and nfpm is pinned by version and
+SHA-256 checksum; keep that policy when touching the workflows. Inspect runs
+with `gh run list` / `gh run view`.
+
 ## Architecture
 
 ### One core, thin front-ends (the central rule)
