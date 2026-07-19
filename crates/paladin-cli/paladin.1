@@ -36,7 +36,9 @@ A
 .I FILE
 of
 .B \-
-means standard input.
+means standard input. Run with no arguments at all,
+.B paladin
+prints its help text to standard error and exits 2.
 .SH MODES
 .TP
 .BR \-e ", " \-\-encrypt
@@ -224,6 +226,17 @@ Unsupported, unknown, or malformed format or header.
 .TP
 .B 130
 Canceled by the user (SIGINT).
+.SH ENVIRONMENT
+Help, usage, and error output are colorized only when the destination stream
+is a terminal.
+.TP
+.B NO_COLOR
+When set, disables all color output.
+.TP
+.B CLICOLOR_FORCE
+When set (and
+.B NO_COLOR
+is not), forces color output even when the stream is not a terminal.
 .SH EXAMPLES
 .PP
 Encrypt a file, prompting for a password:

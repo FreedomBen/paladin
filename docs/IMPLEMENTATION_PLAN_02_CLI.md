@@ -149,6 +149,22 @@ rules that clap can't cleanly state (mode→flag applicability, KDF-knob↔`--kd
 `--name`+stdin, `--progress`+`--quiet`) live in `validate.rs` (§5, step 3) so the
 messages are precise and uniformly mapped to exit 2.
 
+**Help & usage presentation.** `cli.rs` also owns how clap renders output
+(DESIGN §6.1):
+
+- `#[command(styles = STYLES)]` applies an explicit cargo-style palette from
+  `clap::builder::styling`: bold-green section headers and usage line,
+  bold-cyan literals, cyan placeholders, bold-red errors, bold-cyan valid /
+  bold-yellow invalid values. clap's anstream backend emits colors only when
+  the destination stream is a terminal and honors `NO_COLOR` /
+  `CLICOLOR_FORCE`, so piped output stays free of escape codes.
+- `help_template` prefixes the help with `{name} {version}`, so `-h`/`--help`
+  (and the no-argument help) open with a `paladin <version>` line.
+- `arg_required_else_help = true`: a bare `paladin` invocation prints the
+  short help (the `-h` form) to **stderr** and exits **2** (usage error)
+  instead of clap's terse missing-argument error. Partial-but-insufficient invocations (e.g. `-e`
+  with no `<FILE>`) still get the normal specific error.
+
 **`-v/--verbose` output.** Verbose prints a defined, secret-free set of
 diagnostics to stderr: before streaming, the mode, the resolved input and output
 paths (`-` for stdin/stdout), and — on encrypt — the chosen cipher and KDF with
@@ -361,6 +377,10 @@ per item:
 - Exact lowercase cipher/KDF parsing; alias/case rejection.
 - Non-UTF-8 OS-native path handling where the platform supports it.
 - Password bytes via file/env/`--no-password` produce a decryptable file.
+- `--help` opens with `paladin <version>`; a bare invocation prints the help
+  (including the version line) to stderr and exits 2.
+- Forced color (`CLICOLOR_FORCE=1`) emits ANSI color codes in `--help` and in
+  the bare-invocation help; piped output without forcing contains none.
 
 After code changes: `cargo fmt`, `cargo clippy --all-targets --all-features`
 (no warnings), `cargo test -p paladin-cli`.
@@ -413,3 +433,4 @@ After code changes: `cargo fmt`, `cargo clippy --all-targets --all-features`
 - [x] **Step 10** — `assert_cmd` integration suite (§8); `fmt` + `clippy` clean.
 - [x] **Step 11** — `--help` text, `paladin(1)` man page, `cargo install`, README CLI section.
 - [x] DESIGN §9 updated: add `ctrlc` (cli); add `cli` to `zeroize`; drop `cli` from `anyhow`.
+- [x] Colored help/usage (cargo palette), version-led help, bare-invocation help → stderr + exit 2.

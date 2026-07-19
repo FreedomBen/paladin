@@ -94,6 +94,94 @@ fn help_lists_every_documented_flag() {
     }
 }
 
+/// The `paladin <version>` line that must open the help output (DESIGN §6.1).
+fn version_line() -> String {
+    format!("paladin {}", env!("CARGO_PKG_VERSION"))
+}
+
+#[test]
+fn help_opens_with_name_and_version() {
+    let assert = sc().arg("--help").assert().success();
+    let text = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    assert!(
+        text.starts_with(&version_line()),
+        "--help does not open with `{}`:\n{text}",
+        version_line()
+    );
+}
+
+#[test]
+fn no_args_prints_help_with_version_and_exits_2() {
+    let assert = sc().assert().code(2);
+    let err = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(
+        err.contains(&version_line()),
+        "bare invocation is missing `{}`:\n{err}",
+        version_line()
+    );
+    assert!(
+        err.contains("Usage:"),
+        "bare invocation lacks usage:\n{err}"
+    );
+    assert!(
+        err.contains("--encrypt"),
+        "bare invocation lacks flags:\n{err}"
+    );
+}
+
+// Color: clap emits escapes only for a TTY; CLICOLOR_FORCE overrides the
+// pipe used by the test harness, NO_COLOR (checked first) must be cleared.
+// Green (32m) styles headers/usage, cyan (36m) literals (plan 02 §4).
+
+#[test]
+fn help_is_colored_when_forced() {
+    let assert = sc()
+        .env_remove("NO_COLOR")
+        .env("CLICOLOR_FORCE", "1")
+        .arg("--help")
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    for code in ["\u{1b}[", "32m", "36m"] {
+        assert!(
+            text.contains(code),
+            "forced-color --help lacks ANSI `{code}`:\n{text:?}"
+        );
+    }
+}
+
+#[test]
+fn no_args_help_is_colored_when_forced() {
+    let assert = sc()
+        .env_remove("NO_COLOR")
+        .env("CLICOLOR_FORCE", "1")
+        .assert()
+        .code(2);
+    let err = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    for code in ["\u{1b}[", "32m"] {
+        assert!(
+            err.contains(code),
+            "forced-color bare invocation lacks ANSI `{code}`:\n{err:?}"
+        );
+    }
+}
+
+#[test]
+fn help_is_plain_when_piped() {
+    let assert = sc()
+        .env_remove("NO_COLOR")
+        .env_remove("CLICOLOR")
+        .env_remove("CLICOLOR_FORCE")
+        .arg("--help")
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    assert!(
+        !text.contains('\u{1b}'),
+        "piped --help contains escape codes:\n{text:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Step 2 — arg model: required mode group + positional <FILE>.
 // ---------------------------------------------------------------------------

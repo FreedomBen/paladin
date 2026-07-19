@@ -2,9 +2,21 @@
 //! names arrive as raw strings and are parsed by the core's `FromStr` in
 //! `options.rs`. Cross-flag semantic rules live in `validate.rs`.
 
+use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::{ArgGroup, Parser};
 use std::ffi::OsString;
 use std::path::PathBuf;
+
+/// Cargo-style help/usage palette (DESIGN §6.1). clap's anstream backend only
+/// emits colors to a terminal and honors `NO_COLOR` / `CLICOLOR_FORCE`.
+const STYLES: Styles = Styles::styled()
+    .header(AnsiColor::Green.on_default().effects(Effects::BOLD))
+    .usage(AnsiColor::Green.on_default().effects(Effects::BOLD))
+    .literal(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
+    .placeholder(AnsiColor::Cyan.on_default())
+    .error(AnsiColor::Red.on_default().effects(Effects::BOLD))
+    .valid(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
+    .invalid(AnsiColor::Yellow.on_default().effects(Effects::BOLD));
 
 /// The four operating modes, derived from the mutually-exclusive mode group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,6 +32,9 @@ pub enum Mode {
 #[command(
     name = "paladin",
     version,
+    styles = STYLES,
+    arg_required_else_help = true,
+    help_template = "{before-help}{name} {version}\n{about-with-newline}\n{usage-heading} {usage}\n\n{all-args}{after-help}",
     about = "Simple, safe symmetric file encryption.",
     long_about = "Simple, safe symmetric file encryption.\n\n\
         Decrypt (-d), verify (--verify), and info (-i) auto-detect both paladin \

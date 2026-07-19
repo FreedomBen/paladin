@@ -602,6 +602,14 @@ paladin (-e|--encrypt | -d|--decrypt | -i|--info | --verify) <FILE> [options]
 Except for `-h/--help` and `-V/--version`, exactly one mode and one `<FILE>` are
 required. `<FILE>` of `-` means **stdin**.
 
+Invoked with no arguments at all, `paladin` prints its short help text (the
+`-h` form) to **stderr** and exits **2** (usage error) instead of emitting a
+terse missing-argument message. Both `-h/--help` and this no-argument help open with a
+`paladin <version>` line. Help, usage, and error output are colorized only when
+the destination stream is a terminal — clap's runtime detection, which honors
+`NO_COLOR` and `CLICOLOR_FORCE` — so piped or redirected output carries no
+escape codes.
+
 ### 6.2 Modes
 
 | Mode             | Action                                                            |

@@ -2,7 +2,8 @@
 #
 # Cross-cutting properties that don't belong to a single flag area: header
 # authentication / downgrade resistance, reserved-flag rejection, fresh
-# per-file randomness, quiet-mode quietness, and the --help/--version surface.
+# per-file randomness, quiet-mode quietness, and the --help/--version/
+# bare-invocation surface.
 
 require "test_helper"
 
@@ -72,10 +73,12 @@ class MiscTest < E2ETest
     assert_empty dec.stderr, "--quiet decrypt should not chatter on stderr"
   end
 
-  # `--help` and `--version` exit 0 with the expected surface text.
+  # `--help` and `--version` exit 0 with the expected surface text; help
+  # opens with the `paladin <version>` line (DESIGN §6.1).
   def test_help_and_version
     help = paladin("--help")
     assert_status help, 0
+    assert_match(/\Apaladin \d+\.\d+\.\d+$/, help.stdout)
     assert_includes help.stdout, "Usage"
     assert_includes help.stdout, "--encrypt"
     assert_includes help.stdout, "--decrypt"
@@ -83,6 +86,17 @@ class MiscTest < E2ETest
     version = paladin("--version")
     assert_status version, 0
     assert_match(/paladin \d+\.\d+\.\d+/, version.stdout)
+  end
+
+  # Invoked with no arguments at all: short help (with the version line) on
+  # stderr, nothing on stdout, exit 2 (DESIGN §6.1).
+  def test_bare_invocation_prints_help_and_exits_2
+    bare = paladin
+    assert_status bare, 2
+    assert_empty bare.stdout, "bare invocation should write nothing to stdout"
+    assert_match(/\Apaladin \d+\.\d+\.\d+$/, bare.stderr)
+    assert_includes bare.stderr, "Usage"
+    assert_includes bare.stderr, "--encrypt"
   end
 
   private
