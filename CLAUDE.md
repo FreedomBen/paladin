@@ -82,6 +82,12 @@ Third-party actions are pinned to commit SHAs and nfpm is pinned by version and
 SHA-256 checksum; keep that policy when touching the workflows. Inspect runs
 with `gh run list` / `gh run view`.
 
+To bump the project version, use the `bump-version` skill
+(`.claude/skills/bump-version/SKILL.md`). The version lives in more places
+than the workspace `Cargo.toml` (internal path-dependency requirements, man
+page headers, `Cargo.lock`); the skill updates them all, verifies with a grep
+sweep and `make ci`, and commits.
+
 ## Architecture
 
 ### One core, thin front-ends (the central rule)
