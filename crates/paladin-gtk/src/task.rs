@@ -42,13 +42,13 @@ impl ProgressThrottle {
     /// stored bucket), or always when `p.total` is `None`.
     pub fn should_emit(&mut self, p: Progress) -> bool {
         let bucket = match p.total {
-            Some(t) => {
-                if t == 0 {
-                    100
-                } else {
-                    (p.done.saturating_mul(100) / t) as u8
-                }
-            }
+            // `checked_div` is `None` exactly when `t == 0`: an empty input is
+            // complete, so that maps to bucket 100.
+            Some(t) => p
+                .done
+                .saturating_mul(100)
+                .checked_div(t)
+                .map_or(100, |b| b as u8),
             None => return true,
         };
         if self.last == Some(bucket) {
