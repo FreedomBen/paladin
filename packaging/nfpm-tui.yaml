@@ -15,7 +15,7 @@ section: utils
 priority: optional
 maintainer: "Benjamin Porter <FreedomBen@users.noreply.github.com>"
 vendor: "Benjamin Porter"
-homepage: "https://github.com/benjaminporter/paladin"
+homepage: "https://github.com/FreedomBen/paladin"
 license: "MIT OR Apache-2.0"
 description: |
   Simple, safe symmetric file encryption (interactive terminal UI).

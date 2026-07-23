@@ -20,8 +20,8 @@
     </p>
   </description>
   <launchable type="desktop-id">org.paladin.Gtk.desktop</launchable>
-  <url type="homepage">https://github.com/benjaminporter/paladin</url>
-  <url type="bugtracker">https://github.com/benjaminporter/paladin/issues</url>
+  <url type="homepage">https://github.com/FreedomBen/paladin</url>
+  <url type="bugtracker">https://github.com/FreedomBen/paladin/issues</url>
   <developer id="org.paladin">
     <name>paladin contributors</name>
   </developer>
