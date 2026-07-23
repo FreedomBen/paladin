@@ -41,6 +41,10 @@ Work through these in order, checking each off:
       `crates/paladin-cli/paladin.1` and `docs/paladin-tui.1`. Update the
       source field `"paladin X.Y.Z"` (both intentionally say `paladin`, not
       the binary name) and set the date field to today's date (YYYY-MM-DD).
+- [ ] **README install examples** — the `VERSION=X.Y.Z` lines in the
+      "Installing a Release" section of `README.md` (one per package-manager
+      block) illustrate downloading the newest release; set them to the new
+      version.
 - [ ] **`Cargo.lock`** — refresh the workspace members' recorded versions with
       `cargo update --workspace` (touches only the workspace crates, not
       third-party dependencies). Commit the refreshed lockfile with the bump.
@@ -63,7 +67,7 @@ Work through these in order, checking each off:
 ## Commit
 
 Commit all changed files together — root `Cargo.toml`, the three crate
-manifests, both man pages, `Cargo.lock` — with a message like
+manifests, both man pages, `README.md`, `Cargo.lock` — with a message like
 `Bump version to X.Y.Z`, following the repository's commit-lock protocol
 (see CLAUDE.md). Do not tag and do not push.
 

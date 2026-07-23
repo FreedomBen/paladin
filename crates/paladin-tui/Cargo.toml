@@ -15,8 +15,8 @@ anyhow = "1.0.102"
 clap = { version = "4.6.1", features = ["derive"] }
 crossterm = "0.29.0"
 ratatui = "0.30.0"
-paladin-common = { version = "0.1.0", path = "../paladin-common" }
-paladin-core = { version = "0.1.0", path = "../paladin-core" }
+paladin-common = { version = "0.1.1", path = "../paladin-common" }
+paladin-core = { version = "0.1.1", path = "../paladin-core" }
 zeroize = "1.8.2"
 
 [dev-dependencies]

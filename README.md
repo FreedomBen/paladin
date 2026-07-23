@@ -71,7 +71,7 @@ release you want (the newest is shown at the top of the releases page):
 **Debian / Ubuntu (.deb):**
 
 ```sh
-VERSION=0.1.0
+VERSION=0.1.1
 BASE="https://github.com/FreedomBen/paladin/releases/download/v${VERSION}"
 curl -LO "${BASE}/paladin_${VERSION}-1_amd64.deb"
 curl -LO "${BASE}/SHA256SUMS"
@@ -82,7 +82,7 @@ sudo apt install "./paladin_${VERSION}-1_amd64.deb"
 **Fedora / RHEL (.rpm):**
 
 ```sh
-VERSION=0.1.0
+VERSION=0.1.1
 BASE="https://github.com/FreedomBen/paladin/releases/download/v${VERSION}"
 curl -LO "${BASE}/paladin-${VERSION}-1.x86_64.rpm"
 curl -LO "${BASE}/SHA256SUMS"
