@@ -26,17 +26,23 @@ TUI_MAN1        := docs/paladin-tui.1
 TUI_RELEASE_BIN := target/release/$(TUI_BIN)
 
 # The GTK package `paladin-gtk` builds a binary of the same name. A desktop
-# GUI has no man page; instead it ships a .desktop entry, an icon, and AppStream
-# metainfo into the usual XDG data directories.
-GTK_PKG         := paladin-gtk
-GTK_BIN         := paladin-gtk
-GTK_RELEASE_BIN := target/release/$(GTK_BIN)
-GTK_DESKTOP     := data/org.paladin.Gtk.desktop
-GTK_ICON        := data/icons/hicolor/scalable/apps/org.paladin.Gtk.svg
-GTK_METAINFO    := data/org.paladin.Gtk.metainfo.xml
-APPDIR          := $(PREFIX)/share/applications
-ICONDIR         := $(PREFIX)/share/icons/hicolor/scalable/apps
-METAINFODIR     := $(PREFIX)/share/metainfo
+# GUI has no man page; instead it ships a .desktop entry, the hicolor icon set
+# (scalable + symbolic SVGs and sized PNG fallbacks — the same paladin logo as
+# the sister project paladin-auth), and AppStream metainfo into the usual XDG
+# data directories.
+GTK_PKG           := paladin-gtk
+GTK_BIN           := paladin-gtk
+GTK_RELEASE_BIN   := target/release/$(GTK_BIN)
+GTK_DESKTOP       := data/org.paladin.Gtk.desktop
+GTK_ICON          := data/icons/hicolor/scalable/apps/org.paladin.Gtk.svg
+GTK_ICON_SYMBOLIC := data/icons/hicolor/symbolic/apps/org.paladin.Gtk-symbolic.svg
+GTK_ICON_SIZES    := 16 24 32 48 64 128 256 512
+GTK_METAINFO      := data/org.paladin.Gtk.metainfo.xml
+APPDIR            := $(PREFIX)/share/applications
+ICONBASEDIR       := $(PREFIX)/share/icons/hicolor
+ICONDIR           := $(ICONBASEDIR)/scalable/apps
+ICONSYMBOLICDIR   := $(ICONBASEDIR)/symbolic/apps
+METAINFODIR       := $(PREFIX)/share/metainfo
 
 # Extra arguments passed through to `make run` and `make e2e`, e.g.
 # `make run ARGS="-e file.txt"` or `make e2e ARGS="-n /round_trip/"`.
@@ -112,7 +118,7 @@ install-tui: ## Install the paladin-tui binary and man page under PREFIX
 	$(INSTALL) -d "$(DESTDIR)$(MAN1DIR)"
 	$(INSTALL) -m 0644 "$(TUI_MAN1)" "$(DESTDIR)$(MAN1DIR)/$(TUI_BIN).1"
 
-install-gtk: ## Install the paladin-gtk binary, .desktop, icon, and metainfo under PREFIX
+install-gtk: ## Install the paladin-gtk binary, .desktop, icons, and metainfo under PREFIX
 	$(CARGO) build --release -p $(GTK_PKG)
 	$(INSTALL) -d "$(DESTDIR)$(BINDIR)"
 	$(INSTALL) -m 0755 "$(GTK_RELEASE_BIN)" "$(DESTDIR)$(BINDIR)/$(GTK_BIN)"
@@ -120,6 +126,13 @@ install-gtk: ## Install the paladin-gtk binary, .desktop, icon, and metainfo und
 	$(INSTALL) -m 0644 "$(GTK_DESKTOP)" "$(DESTDIR)$(APPDIR)/org.paladin.Gtk.desktop"
 	$(INSTALL) -d "$(DESTDIR)$(ICONDIR)"
 	$(INSTALL) -m 0644 "$(GTK_ICON)" "$(DESTDIR)$(ICONDIR)/org.paladin.Gtk.svg"
+	$(INSTALL) -d "$(DESTDIR)$(ICONSYMBOLICDIR)"
+	$(INSTALL) -m 0644 "$(GTK_ICON_SYMBOLIC)" "$(DESTDIR)$(ICONSYMBOLICDIR)/org.paladin.Gtk-symbolic.svg"
+	for size in $(GTK_ICON_SIZES); do \
+		$(INSTALL) -d "$(DESTDIR)$(ICONBASEDIR)/$${size}x$${size}/apps" && \
+		$(INSTALL) -m 0644 "data/icons/hicolor/$${size}x$${size}/apps/org.paladin.Gtk.png" \
+			"$(DESTDIR)$(ICONBASEDIR)/$${size}x$${size}/apps/org.paladin.Gtk.png" || exit 1; \
+	done
 	$(INSTALL) -d "$(DESTDIR)$(METAINFODIR)"
 	$(INSTALL) -m 0644 "$(GTK_METAINFO)" "$(DESTDIR)$(METAINFODIR)/org.paladin.Gtk.metainfo.xml"
 
@@ -131,10 +144,14 @@ uninstall-tui: ## Remove the installed paladin-tui binary and man page
 	rm -f "$(DESTDIR)$(BINDIR)/$(TUI_BIN)"
 	rm -f "$(DESTDIR)$(MAN1DIR)/$(TUI_BIN).1"
 
-uninstall-gtk: ## Remove the installed paladin-gtk binary, .desktop, icon, and metainfo
+uninstall-gtk: ## Remove the installed paladin-gtk binary, .desktop, icons, and metainfo
 	rm -f "$(DESTDIR)$(BINDIR)/$(GTK_BIN)"
 	rm -f "$(DESTDIR)$(APPDIR)/org.paladin.Gtk.desktop"
 	rm -f "$(DESTDIR)$(ICONDIR)/org.paladin.Gtk.svg"
+	rm -f "$(DESTDIR)$(ICONSYMBOLICDIR)/org.paladin.Gtk-symbolic.svg"
+	for size in $(GTK_ICON_SIZES); do \
+		rm -f "$(DESTDIR)$(ICONBASEDIR)/$${size}x$${size}/apps/org.paladin.Gtk.png"; \
+	done
 	rm -f "$(DESTDIR)$(METAINFODIR)/org.paladin.Gtk.metainfo.xml"
 
 package: package-deb package-rpm ## Build .deb and .rpm packages for every binary (needs nfpm)

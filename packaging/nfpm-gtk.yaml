@@ -38,6 +38,42 @@ contents:
     dst: /usr/share/icons/hicolor/scalable/apps/org.paladin.Gtk.svg
     file_info:
       mode: 0644
+  - src: ./data/icons/hicolor/symbolic/apps/org.paladin.Gtk-symbolic.svg
+    dst: /usr/share/icons/hicolor/symbolic/apps/org.paladin.Gtk-symbolic.svg
+    file_info:
+      mode: 0644
+  - src: ./data/icons/hicolor/16x16/apps/org.paladin.Gtk.png
+    dst: /usr/share/icons/hicolor/16x16/apps/org.paladin.Gtk.png
+    file_info:
+      mode: 0644
+  - src: ./data/icons/hicolor/24x24/apps/org.paladin.Gtk.png
+    dst: /usr/share/icons/hicolor/24x24/apps/org.paladin.Gtk.png
+    file_info:
+      mode: 0644
+  - src: ./data/icons/hicolor/32x32/apps/org.paladin.Gtk.png
+    dst: /usr/share/icons/hicolor/32x32/apps/org.paladin.Gtk.png
+    file_info:
+      mode: 0644
+  - src: ./data/icons/hicolor/48x48/apps/org.paladin.Gtk.png
+    dst: /usr/share/icons/hicolor/48x48/apps/org.paladin.Gtk.png
+    file_info:
+      mode: 0644
+  - src: ./data/icons/hicolor/64x64/apps/org.paladin.Gtk.png
+    dst: /usr/share/icons/hicolor/64x64/apps/org.paladin.Gtk.png
+    file_info:
+      mode: 0644
+  - src: ./data/icons/hicolor/128x128/apps/org.paladin.Gtk.png
+    dst: /usr/share/icons/hicolor/128x128/apps/org.paladin.Gtk.png
+    file_info:
+      mode: 0644
+  - src: ./data/icons/hicolor/256x256/apps/org.paladin.Gtk.png
+    dst: /usr/share/icons/hicolor/256x256/apps/org.paladin.Gtk.png
+    file_info:
+      mode: 0644
+  - src: ./data/icons/hicolor/512x512/apps/org.paladin.Gtk.png
+    dst: /usr/share/icons/hicolor/512x512/apps/org.paladin.Gtk.png
+    file_info:
+      mode: 0644
   - src: ./data/org.paladin.Gtk.metainfo.xml
     dst: /usr/share/metainfo/org.paladin.Gtk.metainfo.xml
     file_info:

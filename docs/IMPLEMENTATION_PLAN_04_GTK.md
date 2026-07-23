@@ -201,7 +201,10 @@ and test it; verify the UI by hand.**
   (including Unix `0600`), same-file/self-overwrite refusal, keyfile caps;
   `message.rs` mapping for every `PalError` variant; `info.rs` field/order
   parity with CLI `--info`; `task.rs` encrypt→decrypt round-trip and
-  cancel-removes-temp via temp dirs. These run in normal `cargo test`.
+  cancel-removes-temp via temp dirs; `tests/icon_assets.rs` hicolor
+  icon-layout contract (files exist, PNG dimensions match their size
+  directory, symbolic uses `currentColor`, desktop/Makefile/nfpm agree).
+  These run in normal `cargo test`.
 - **Shared core tests** already cover crypto/format correctness — GTK does not
   duplicate them.
 - **Manual verification checklist** (record in the PR): drag-and-drop;
@@ -216,6 +219,32 @@ and test it; verify the UI by hand.**
 - `data/org.paladin.Gtk.desktop` — `Name=paladin`, `Exec=paladin-gtk`,
   `Icon=org.paladin.Gtk`, `Categories=Utility;Security;`, `Terminal=false`.
   (Optional, recommended: an AppStream `metainfo.xml` and an SVG icon.)
+- **App icon (shared paladin logo).** paladin uses the same logo artwork as
+  the sister project `paladin-auth`; the assets live under `data/icons/` at
+  the workspace root and install verbatim into the freedesktop hicolor theme
+  (`$(PREFIX)/share/icons/hicolor/...`) via `make install-gtk` and the nfpm
+  `.deb`/`.rpm` packages. `gtk::IconTheme`, the desktop entry's
+  `Icon=org.paladin.Gtk` key, and the window's
+  `set_icon_name(Some(APP_ID))` all resolve the icon by app id from that
+  layout — no gresource embedding and no runtime search-path wiring.
+  - `data/icons/hicolor/scalable/apps/org.paladin.Gtk.svg` — colored
+    scalable variant: the 512×512 source bitmap embedded in an SVG wrapper
+    (base64 PNG) with an explicit `viewBox` so it rescales cleanly.
+  - `data/icons/hicolor/<S>x<S>/apps/org.paladin.Gtk.png` for
+    S ∈ 16/24/32/48/64/128/256/512 — raster fallbacks for consumers that
+    skip the SVG (GNOME Shell requests the large sizes directly; legacy
+    panels read the small ones).
+  - `data/icons/hicolor/symbolic/apps/org.paladin.Gtk-symbolic.svg` —
+    16×16 `currentColor` symbolic variant so the Adwaita palette can
+    recolor it against the active foreground.
+  - `data/icons/source/paladin-logo.png` and
+    `data/icons/source/paladin-logo-square-512.png` — the source bitmaps
+    the hicolor set is rasterized from (not installed).
+  - `crates/paladin-gtk/tests/icon_assets.rs` pins the layout contract:
+    every size exists with honest PNG magic/IHDR dimensions, the scalable
+    SVG declares a `viewBox`, the symbolic uses `currentColor`, the
+    `.desktop` `Icon=` key matches `APP_ID`, and the Makefile/nfpm configs
+    reference the full set.
 - Build/run notes: requires GTK4 + libadwaita **dev** libraries; document the
   package names for at least Fedora and Debian/Ubuntu; `cargo run -p
   paladin-gtk` for development. Note Flatpak as a future packaging path.
@@ -245,3 +274,6 @@ and test it; verify the UI by hand.**
 - [ ] Manual UI verification checklist completed. (Pending manual verification on a graphical session — this environment is headless.)
 - [x] Docs: `.desktop` file, GTK build/run notes, README/CLAUDE updates.
 - [x] Packaging: `cargo install`/build notes for `paladin-gtk`.
+- [x] App icon: shared paladin logo as a full hicolor set (scalable +
+  symbolic + 16–512 PNGs + source bitmaps), installed by `make install-gtk`
+  and the nfpm packages, pinned by `tests/icon_assets.rs`.

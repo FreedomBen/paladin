@@ -62,7 +62,7 @@ needs no Rust toolchain; each one ships the binary and its extras:
 | -------------- | ----------------------------------------------------------- |
 | `paladin`     | The `paladin` CLI and its man page                         |
 | `paladin-tui` | The `paladin-tui` terminal app and its man page            |
-| `paladin-gtk` | The `paladin-gtk` desktop app, `.desktop` entry, and icon  |
+| `paladin-gtk` | The `paladin-gtk` desktop app, `.desktop` entry, and icons |
 
 Download the package for your distribution with `curl`, verify it against
 `SHA256SUMS`, and install it with your package manager. Set `VERSION` to the
@@ -226,14 +226,14 @@ cargo install --path crates/paladin-gtk    # the desktop app (needs step 2)
 ```
 
 Or use the Makefile to install a binary **and** its packaged extras — a man page
-for the CLI/TUI, or the `.desktop` entry, icon, and AppStream metainfo for GTK —
+for the CLI/TUI, or the `.desktop` entry, icons, and AppStream metainfo for GTK —
 under a prefix (default `/usr/local`; override with `PREFIX=`, stage with
 `DESTDIR=`):
 
 ```sh
 make install                       # paladin CLI + man page
 make install-tui                   # paladin-tui + man page
-make install-gtk                   # paladin-gtk + .desktop + icon + metainfo
+make install-gtk                   # paladin-gtk + .desktop + icons + metainfo
 make install PREFIX="$HOME/.local"
 ```
 
@@ -249,9 +249,9 @@ the CLI on a headless box never pulls in the GTK stack:
 
 | Package        | Installs                                               | Runtime dependencies |
 | -------------- | ----------------------------------------------------- | -------------------- |
-| `paladin`     | `paladin` CLI and its man page                       | libc                 |
-| `paladin-tui` | `paladin-tui` and its man page                       | libc                 |
-| `paladin-gtk` | `paladin-gtk`, `.desktop` entry, icon, AppStream data | GTK 4, libadwaita    |
+| `paladin`     | `paladin` CLI and its man page                         | libc                 |
+| `paladin-tui` | `paladin-tui` and its man page                         | libc                 |
+| `paladin-gtk` | `paladin-gtk`, `.desktop` entry, icons, AppStream data | GTK 4, libadwaita    |
 
 First install nfpm (a single Go binary — it is **not** a build dependency of
 paladin itself):
@@ -414,14 +414,14 @@ As in the CLI and TUI, an authentication failure is reported as the single
 condition "wrong password or corrupted/tampered file".
 
 Run it from the workspace, or install the binary together with its `.desktop`
-entry, icon, and AppStream metainfo:
+entry, icons, and AppStream metainfo:
 
 ```sh
 cargo run -p paladin-gtk                 # run from the source tree
 make run-gtk                              # same, via the Makefile
 
 cargo install --path crates/paladin-gtk  # binary only
-make install-gtk                          # binary + .desktop + icon + metainfo
+make install-gtk                          # binary + .desktop + icons + metainfo
 make install-gtk PREFIX="$HOME/.local"
 make uninstall-gtk                        # remove them again
 ```
@@ -433,7 +433,7 @@ make uninstall-gtk                        # remove them again
 - **No `--password-file` / `--password-env`.** The password is typed into the
   masked entry; those non-interactive sources remain CLI-only.
 
-Flatpak packaging (sandboxed, with the `.desktop`/icon/metainfo already
+Flatpak packaging (sandboxed, with the `.desktop`/icons/metainfo already
 provided) is a possible future distribution path.
 
 ## Library usage
