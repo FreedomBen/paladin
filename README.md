@@ -51,6 +51,57 @@ The core never reads argv, never prompts, never touches the filesystem on its
 own, never decides whether to overwrite, and never exits the process. It takes
 generic `Read`/`Write` and reports progress through a callback.
 
+## Installing a Release
+
+Every tagged version publishes prebuilt Linux x86-64 packages on the
+[releases page](https://github.com/FreedomBen/paladin/releases) — one `.deb`
+and one `.rpm` per front-end, plus a `SHA256SUMS` file. Installing a package
+needs no Rust toolchain; each one ships the binary and its extras:
+
+| Package        | Installs                                                    |
+| -------------- | ----------------------------------------------------------- |
+| `paladin`     | The `paladin` CLI and its man page                         |
+| `paladin-tui` | The `paladin-tui` terminal app and its man page            |
+| `paladin-gtk` | The `paladin-gtk` desktop app, `.desktop` entry, and icon  |
+
+Download the package for your distribution with `curl`, verify it against
+`SHA256SUMS`, and install it with your package manager. Set `VERSION` to the
+release you want (the newest is shown at the top of the releases page):
+
+**Debian / Ubuntu (.deb):**
+
+```sh
+VERSION=0.1.0
+BASE="https://github.com/FreedomBen/paladin/releases/download/v${VERSION}"
+curl -LO "${BASE}/paladin_${VERSION}-1_amd64.deb"
+curl -LO "${BASE}/SHA256SUMS"
+sha256sum --check --ignore-missing SHA256SUMS
+sudo apt install "./paladin_${VERSION}-1_amd64.deb"
+```
+
+**Fedora / RHEL (.rpm):**
+
+```sh
+VERSION=0.1.0
+BASE="https://github.com/FreedomBen/paladin/releases/download/v${VERSION}"
+curl -LO "${BASE}/paladin-${VERSION}-1.x86_64.rpm"
+curl -LO "${BASE}/SHA256SUMS"
+sha256sum --check --ignore-missing SHA256SUMS
+sudo dnf install "./paladin-${VERSION}-1.x86_64.rpm"
+```
+
+Prefer `wget`? Use `wget "${BASE}/<file>"` in place of `curl -LO "${BASE}/<file>"`.
+
+Asset names follow nfpm's conventions — `<package>_<version>-1_amd64.deb` and
+`<package>-<version>-1.x86_64.rpm`, where `-1` is the package release number.
+Substitute `paladin-tui` or `paladin-gtk` for `paladin` in the commands above
+to install the other front-ends; installing `paladin-gtk` pulls in its GTK 4
+and libadwaita runtime dependencies automatically. Remove a package again with
+`sudo apt remove <package>` or `sudo dnf remove <package>`.
+
+Only Linux x86-64 packages are published today. On other platforms or
+architectures, build from source instead — see the next section.
+
 ## Building from source
 
 `paladin` builds with a standard Rust toolchain and Cargo. The `paladin` CLI
