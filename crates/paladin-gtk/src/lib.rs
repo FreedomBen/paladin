@@ -10,6 +10,7 @@
 //! not spuriously flagged as dead code while the UI is wired up incrementally).
 
 pub mod app;
+pub mod editor;
 pub mod fsio;
 pub mod info;
 pub mod message;

@@ -1,15 +1,18 @@
-//! `Mode` (Encrypt/Decrypt/Info/Verify) and per-mode field-visibility rules.
+//! `Mode` (Encrypt/Decrypt/Info/Verify/Edit) and per-mode field-visibility
+//! rules.
 //!
 //! This module is pure logic: no GTK, no crypto, no I/O. It encodes which UI
 //! controls each mode shows (DESIGN §8.2, `docs/IMPLEMENTATION_PLAN_04_GTK.md`
 //! §5–6) plus a few semantic helpers that later modules (`options.rs`,
 //! `task.rs`, the relm4 component) consume to stay consistent with the CLI.
 
-/// The four operations the GTK front-end exposes, one per `ViewSwitcher` tab.
+/// The five operations the GTK front-end exposes, one per `ViewSwitcher` tab.
 ///
-/// These mirror the four core operations: `Encrypt`/`Decrypt` round-trip a
+/// The first four mirror the core operations: `Encrypt`/`Decrypt` round-trip a
 /// file, `Info` runs `inspect` (no password), and `Verify` decrypts-and-discards
-/// to check integrity.
+/// to check integrity. `Edit` (DESIGN §8.4) decrypts a small text file into an
+/// in-memory editor window; its output handling lives in that window, not in
+/// the main form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     /// Encrypt a plaintext file into a self-describing container.
@@ -20,6 +23,8 @@ pub enum Mode {
     Info,
     /// Decrypt-and-discard to confirm a container is intact.
     Verify,
+    /// Decrypt a small text file into an in-memory editor window (DESIGN §8.4).
+    Edit,
 }
 
 /// A UI control whose visibility depends on the active [`Mode`].
@@ -79,9 +84,15 @@ impl Field {
 }
 
 impl Mode {
-    /// The four modes in `ViewSwitcher` tab order.
-    pub fn all() -> [Mode; 4] {
-        [Mode::Encrypt, Mode::Decrypt, Mode::Info, Mode::Verify]
+    /// The five modes in `ViewSwitcher` tab order (DESIGN §8.2).
+    pub fn all() -> [Mode; 5] {
+        [
+            Mode::Encrypt,
+            Mode::Decrypt,
+            Mode::Info,
+            Mode::Verify,
+            Mode::Edit,
+        ]
     }
 
     /// The tab label shown in the `ViewSwitcher`.
@@ -91,15 +102,27 @@ impl Mode {
             Mode::Decrypt => "Decrypt",
             Mode::Info => "Info",
             Mode::Verify => "Verify",
+            Mode::Edit => "Edit",
         }
     }
 
-    /// Whether `field`'s control is visible in this mode (DESIGN §8.2).
+    /// The action-button label. Every mode's button repeats its tab title
+    /// except Edit, whose action opens the editor window rather than "editing"
+    /// in place (DESIGN §8.4).
+    pub fn action_label(self) -> &'static str {
+        match self {
+            Mode::Edit => "Open",
+            other => other.title(),
+        }
+    }
+
+    /// Whether `field`'s control is visible in this mode (DESIGN §8.2, §8.4).
     pub fn shows(self, field: Field) -> bool {
         match field {
             // The input path is the one control common to every mode.
             Field::Input => true,
-            // Only operations that write a file expose an output path.
+            // Only operations that write a file expose an output path. Edit
+            // saves from its own window, so the main form shows none.
             Field::Output => self.needs_output(),
             // Password mirrors "this mode consumes a secret".
             Field::Password => self.needs_secret(),
@@ -118,21 +141,31 @@ impl Mode {
         }
     }
 
-    /// Whether this mode requires a password/keyfile. True for Encrypt, Decrypt,
-    /// and Verify; false for Info (`inspect` reads only the plaintext header).
+    /// Whether this mode requires a password/keyfile. True for Encrypt,
+    /// Decrypt, Verify, and Edit; false for Info (`inspect` reads only the
+    /// plaintext header).
     pub fn needs_secret(self) -> bool {
-        matches!(self, Mode::Encrypt | Mode::Decrypt | Mode::Verify)
+        matches!(
+            self,
+            Mode::Encrypt | Mode::Decrypt | Mode::Verify | Mode::Edit
+        )
     }
 
-    /// Whether this mode writes an output file (Encrypt and Decrypt).
+    /// Whether this mode writes an output file from the main form (Encrypt and
+    /// Decrypt). Edit writes files too, but from its editor window (DESIGN
+    /// §8.4), so the main form treats it as output-less.
     pub fn needs_output(self) -> bool {
         matches!(self, Mode::Encrypt | Mode::Decrypt)
     }
 
     /// Whether this mode runs its crypto on a background worker. True for
-    /// Encrypt, Decrypt, and Verify; Info's `inspect` runs inline.
+    /// Encrypt, Decrypt, Verify, and Edit (decrypt-to-memory); Info's
+    /// `inspect` runs inline.
     pub fn runs_on_worker(self) -> bool {
-        matches!(self, Mode::Encrypt | Mode::Decrypt | Mode::Verify)
+        matches!(
+            self,
+            Mode::Encrypt | Mode::Decrypt | Mode::Verify | Mode::Edit
+        )
     }
 }
 
@@ -149,10 +182,10 @@ mod tests {
         match field {
             Input => true,
             Output => matches!(mode, Encrypt | Decrypt),
-            Password => matches!(mode, Encrypt | Decrypt | Verify),
+            Password => matches!(mode, Encrypt | Decrypt | Verify | Edit),
             ConfirmPassword => matches!(mode, Encrypt),
-            KeyfileOnly => matches!(mode, Encrypt | Decrypt | Verify),
-            Keyfile => matches!(mode, Encrypt | Decrypt | Verify),
+            KeyfileOnly => matches!(mode, Encrypt | Decrypt | Verify | Edit),
+            Keyfile => matches!(mode, Encrypt | Decrypt | Verify | Edit),
             Cipher => matches!(mode, Encrypt),
             Kdf => matches!(mode, Encrypt),
             KdfKnobs => matches!(mode, Encrypt),
@@ -196,7 +229,7 @@ mod tests {
         ];
         for field in encrypt_only {
             assert!(Mode::Encrypt.shows(field), "Encrypt must show {field:?}");
-            for mode in [Mode::Decrypt, Mode::Info, Mode::Verify] {
+            for mode in [Mode::Decrypt, Mode::Info, Mode::Verify, Mode::Edit] {
                 assert!(!mode.shows(field), "{mode:?} must hide {field:?}");
             }
         }
@@ -205,8 +238,25 @@ mod tests {
     #[test]
     fn info_results_pane_is_info_only() {
         assert!(Mode::Info.shows(Field::InfoResults));
-        for mode in [Mode::Encrypt, Mode::Decrypt, Mode::Verify] {
+        for mode in [Mode::Encrypt, Mode::Decrypt, Mode::Verify, Mode::Edit] {
             assert!(!mode.shows(Field::InfoResults));
+        }
+    }
+
+    #[test]
+    fn edit_shows_only_input_and_secret_rows() {
+        // DESIGN §8.4: the Edit form is input + password + keyfile rows; no
+        // output row, no confirm row, no Advanced section, no Info pane.
+        for field in Field::ALL {
+            let expected = matches!(
+                field,
+                Field::Input | Field::Password | Field::KeyfileOnly | Field::Keyfile
+            );
+            assert_eq!(
+                Mode::Edit.shows(field),
+                expected,
+                "Edit visibility wrong for {field:?}"
+            );
         }
     }
 
@@ -227,6 +277,7 @@ mod tests {
         assert!(Mode::Encrypt.needs_secret());
         assert!(Mode::Decrypt.needs_secret());
         assert!(Mode::Verify.needs_secret());
+        assert!(Mode::Edit.needs_secret());
         assert!(!Mode::Info.needs_secret());
     }
 
@@ -236,6 +287,8 @@ mod tests {
         assert!(Mode::Decrypt.needs_output());
         assert!(!Mode::Info.needs_output());
         assert!(!Mode::Verify.needs_output());
+        // Edit saves from its own window, never from the main form.
+        assert!(!Mode::Edit.needs_output());
     }
 
     #[test]
@@ -243,6 +296,7 @@ mod tests {
         assert!(Mode::Encrypt.runs_on_worker());
         assert!(Mode::Decrypt.runs_on_worker());
         assert!(Mode::Verify.runs_on_worker());
+        assert!(Mode::Edit.runs_on_worker());
         assert!(!Mode::Info.runs_on_worker());
     }
 
@@ -280,7 +334,13 @@ mod tests {
     fn all_order_is_view_switcher_order() {
         assert_eq!(
             Mode::all(),
-            [Mode::Encrypt, Mode::Decrypt, Mode::Info, Mode::Verify]
+            [
+                Mode::Encrypt,
+                Mode::Decrypt,
+                Mode::Info,
+                Mode::Verify,
+                Mode::Edit
+            ]
         );
     }
 
@@ -290,6 +350,19 @@ mod tests {
         assert_eq!(Mode::Decrypt.title(), "Decrypt");
         assert_eq!(Mode::Info.title(), "Info");
         assert_eq!(Mode::Verify.title(), "Verify");
+        assert_eq!(Mode::Edit.title(), "Edit");
+    }
+
+    #[test]
+    fn action_label_is_title_except_edit_opens() {
+        for mode in Mode::all() {
+            let expected = if mode == Mode::Edit {
+                "Open"
+            } else {
+                mode.title()
+            };
+            assert_eq!(mode.action_label(), expected, "{mode:?}");
+        }
     }
 
     #[test]

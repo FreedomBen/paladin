@@ -248,7 +248,7 @@ impl AppModel {
                     self.toast("Could not read header to prefill output name");
                 }
             },
-            Mode::Info | Mode::Verify => {}
+            Mode::Info | Mode::Verify | Mode::Edit => {}
         }
     }
 
@@ -1053,6 +1053,7 @@ impl AppModel {
             Mode::Encrypt => format!("Encrypted {name}"),
             Mode::Decrypt => format!("Decrypted {name}"),
             Mode::Verify => "Integrity verified".to_owned(),
+            Mode::Edit => format!("Opened {name}"),
             // Info never runs on the worker, so it never reaches here.
             Mode::Info => "Done".to_owned(),
         }

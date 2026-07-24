@@ -11,13 +11,19 @@
 
 use std::fmt;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::ops::ControlFlow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use paladin_core::{decrypt, encrypt, verify, EncryptOptions, PalError, Progress, Secret};
+use zeroize::Zeroizing;
 
+use paladin_core::{
+    decrypt, encrypt, inspect, is_armored, verify, EncryptOptions, Metadata, PalError, Progress,
+    Secret,
+};
+
+use crate::editor::{self, BoundedPlainWriter, EDITOR_MAX_BYTES};
 use crate::fsio::{self, FsError};
 use crate::mode::Mode;
 
@@ -134,6 +140,25 @@ impl From<PalError> for RunError {
     }
 }
 
+/// The progress closure every runner hands to the core: observe `cancel` (a
+/// set flag returns `Break`, which the core maps to [`PalError::Canceled`])
+/// and forward throttled reports to `on_progress`.
+fn progress_cb<'a, P: FnMut(Progress)>(
+    cancel: &'a AtomicBool,
+    throttle: &'a mut ProgressThrottle,
+    on_progress: &'a mut P,
+) -> impl FnMut(Progress) -> ControlFlow<()> + 'a {
+    move |p: Progress| {
+        if cancel.load(Ordering::Relaxed) {
+            return ControlFlow::Break(());
+        }
+        if throttle.should_emit(p) {
+            on_progress(p);
+        }
+        ControlFlow::Continue(())
+    }
+}
+
 /// Run one [`Job`] synchronously to completion or first error.
 ///
 /// Steps: verify the input is a regular file, open it, open a sibling-temp
@@ -164,15 +189,7 @@ pub fn run_job<P: FnMut(Progress)>(
     // the simultaneous `&mut` borrows of `out` and `cb` in the core call are
     // independent.
     let mut throttle = ProgressThrottle::new();
-    let mut cb = |p: Progress| {
-        if cancel.load(Ordering::Relaxed) {
-            return ControlFlow::Break(());
-        }
-        if throttle.should_emit(p) {
-            on_progress(p);
-        }
-        ControlFlow::Continue(())
-    };
+    let mut cb = progress_cb(cancel, &mut throttle, &mut on_progress);
 
     match job.mode {
         Mode::Encrypt | Mode::Decrypt => {
@@ -204,10 +221,10 @@ pub fn run_job<P: FnMut(Progress)>(
         Mode::Verify => {
             verify(&mut reader, &job.secret, input_len, &mut cb).map_err(RunError::Core)?;
         }
-        Mode::Info => {
-            // Info runs inline via `inspect` and is excluded by
-            // `Mode::runs_on_worker`; it should never reach the worker runner.
-            debug_assert!(false, "Info is never a worker Job");
+        Mode::Info | Mode::Edit => {
+            // Info runs inline via `inspect`; Edit opens through
+            // [`open_for_edit`]. Neither is ever built into a generic `Job`.
+            debug_assert!(false, "Info/Edit are never generic worker Jobs");
             return Err(RunError::Core(PalError::Canceled));
         }
     }
@@ -224,6 +241,179 @@ pub fn run_job<P: FnMut(Progress)>(
     };
 
     Ok(RunSuccess { remove_warning })
+}
+
+// --- Editor open/save (DESIGN §8.4) -----------------------------------------
+
+/// Everything the editor window needs after a successful open: the decrypted
+/// text, the metadata its save derivation starts from, the recorded armor
+/// layer, the backing path, and the session secret (retained so Save never
+/// re-prompts; dropped — and zeroized — when the window closes).
+pub struct EditorSeed {
+    /// The decrypted text; zeroized on drop once its contents enter the widget.
+    pub text: Zeroizing<String>,
+    /// What `inspect` recognized (paladin vs AES Crypt source).
+    pub metadata: Metadata,
+    /// Whether the source was ASCII-armored; saves re-armor in kind.
+    pub armored: bool,
+    /// The opened file; Save writes back here.
+    pub path: PathBuf,
+    /// The session secret.
+    pub secret: Secret,
+}
+
+/// Why an editor open failed. `TooLarge` and `NotText` get editor-specific
+/// dialogs pointing at Decrypt mode; the other arms map like any run error.
+#[derive(Debug)]
+pub enum OpenError {
+    /// The decrypted text exceeds the [`EDITOR_MAX_BYTES`] cap.
+    TooLarge,
+    /// The decrypted content is not UTF-8 text.
+    NotText,
+    /// A filesystem/glue error (missing input, not a regular file, …).
+    Fs(FsError),
+    /// A core error (auth failure, malformed file, canceled, …).
+    Core(PalError),
+}
+
+impl fmt::Display for OpenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OpenError::TooLarge => write!(
+                f,
+                "the decrypted text exceeds the {} MiB editor limit",
+                EDITOR_MAX_BYTES / (1024 * 1024)
+            ),
+            OpenError::NotText => write!(f, "{}", editor::NotText),
+            OpenError::Fs(e) => write!(f, "{e}"),
+            OpenError::Core(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for OpenError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            OpenError::Fs(e) => Some(e),
+            OpenError::Core(e) => Some(e),
+            OpenError::TooLarge | OpenError::NotText => None,
+        }
+    }
+}
+
+/// Ciphertext longer than this cannot decode to text under the editor cap, so
+/// the open is refused before any KDF work. Worst case the plaintext is still
+/// ≈ 0.72 × the file length (base64 armor with line breaks, minus bounded
+/// header and per-chunk tag overhead), so at 2 × the cap the plaintext is
+/// certainly over it. Fast path only — the bounded writer stays authoritative.
+const OPEN_FAST_REFUSE: u64 = EDITOR_MAX_BYTES as u64 * 2;
+
+/// Open `path` for the editor (DESIGN §8.4): decrypt it into a bounded
+/// in-memory buffer and gate the result, returning the seed the editor window
+/// is built from.
+///
+/// Steps: require a regular file → fast-refuse ciphertext over
+/// [`OPEN_FAST_REFUSE`] → `inspect` (recording whether the source is a paladin
+/// or AES Crypt container) → record the armor layer via `is_armored` → decrypt
+/// through a [`BoundedPlainWriter`] capped at [`EDITOR_MAX_BYTES`] → strict
+/// UTF-8 gate. Cancellation and progress behave exactly as in [`run_job`];
+/// nothing is written to disk on any path.
+pub fn open_for_edit<P: FnMut(Progress)>(
+    path: &Path,
+    secret: Secret,
+    cancel: &AtomicBool,
+    mut on_progress: P,
+) -> Result<EditorSeed, OpenError> {
+    fsio::require_regular_file(path).map_err(OpenError::Fs)?;
+
+    let input_len = std::fs::metadata(path).ok().map(|m| m.len());
+    if input_len.is_some_and(|len| len > OPEN_FAST_REFUSE) {
+        return Err(OpenError::TooLarge);
+    }
+
+    let open = |p: &Path| File::open(p).map_err(|e| OpenError::Fs(FsError::Io(e)));
+
+    // Which container is this? Save derivation needs to know (paladin headers
+    // are preserved; AES Crypt sources migrate behind a confirmation).
+    let metadata = inspect(BufReader::new(open(path)?)).map_err(OpenError::Core)?;
+
+    // Record the armor layer from the leading bytes so a save re-encrypts in
+    // kind; 512 bytes always decide exactly (see `paladin_core::is_armored`).
+    let armored = {
+        let mut file = open(path)?;
+        let mut prefix = [0u8; 512];
+        let mut filled = 0;
+        loop {
+            match file.read(&mut prefix[filled..]) {
+                Ok(0) => break,
+                Ok(n) => {
+                    filled += n;
+                    if filled == prefix.len() {
+                        break;
+                    }
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(OpenError::Fs(FsError::Io(e))),
+            }
+        }
+        is_armored(&prefix[..filled])
+    };
+
+    // Decrypt to memory behind the cap. No disk output exists on any path.
+    let mut reader = BufReader::new(open(path)?);
+    let mut writer = BoundedPlainWriter::new();
+    let mut throttle = ProgressThrottle::new();
+    let mut cb = progress_cb(cancel, &mut throttle, &mut on_progress);
+    if let Err(e) = decrypt(&mut reader, &mut writer, &secret, input_len, &mut cb) {
+        // The bounded writer failing the run is "too large", not an I/O fault.
+        return Err(if writer.overflowed() {
+            OpenError::TooLarge
+        } else {
+            OpenError::Core(e)
+        });
+    }
+
+    let text = editor::text_from_buffer(writer.into_buffer()).map_err(|_| OpenError::NotText)?;
+    Ok(EditorSeed {
+        text,
+        metadata,
+        armored,
+        path: path.to_path_buf(),
+        secret,
+    })
+}
+
+/// Encrypt the editor buffer to `target` through the same sibling-temp +
+/// atomic-rename path as every other output, so a crash mid-save leaves the
+/// original file intact (DESIGN §8.4). Every save is a complete fresh encrypt
+/// (new salt and nonce prefix).
+///
+/// Overwrite is implicitly approved: Save writes back to the opened file
+/// (that is what Save means) and Save As targets come from the native save
+/// dialog, which already confirmed replacement. No same-file guard applies —
+/// the input is the in-memory buffer, not a file.
+pub fn save_from_editor<P: FnMut(Progress)>(
+    text: &[u8],
+    target: &Path,
+    secret: &Secret,
+    options: &EncryptOptions,
+    cancel: &AtomicBool,
+    mut on_progress: P,
+) -> Result<(), RunError> {
+    let mut out = fsio::open_output(target, None, true)?;
+    let mut throttle = ProgressThrottle::new();
+    let mut cb = progress_cb(cancel, &mut throttle, &mut on_progress);
+    encrypt(
+        text,
+        out.as_write(),
+        secret,
+        options,
+        Some(text.len() as u64),
+        &mut cb,
+    )
+    .map_err(RunError::Core)?;
+    out.commit()?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -643,5 +833,245 @@ mod tests {
         );
         assert!(dec.is_ok());
         assert_eq!(fs::read(&recovered).unwrap(), b"new plaintext");
+    }
+
+    // --- editor open/save (DESIGN §8.4) ----------------------------------------
+
+    use crate::editor::SaveSource;
+
+    /// The committed AES Crypt fixture from `paladin-core`'s test data.
+    const AESCRYPT_V2: &[u8] =
+        include_bytes!("../../paladin-core/tests/data/aescrypt/v2_size_17.aes");
+
+    #[test]
+    fn editor_round_trip_open_edit_save_reopen() {
+        let (_dir, _plain, ct) = make_ciphertext(b"first draft\n");
+        let cancel = AtomicBool::new(false);
+
+        let seed = open_for_edit(&ct, secret(), &cancel, noop).unwrap();
+        assert_eq!(&**seed.text, "first draft\n");
+        assert!(matches!(seed.metadata, Metadata::Paladin(_)));
+        assert!(!seed.armored);
+        assert_eq!(seed.path, ct);
+
+        // Derive the save options exactly as the editor window does.
+        let source = SaveSource::from_metadata(&seed.metadata);
+        assert!(!source.needs_migration_confirm());
+        let opts = source.options_for(seed.armored, &seed.path).unwrap();
+        save_from_editor(
+            b"second draft\n",
+            &seed.path,
+            &seed.secret,
+            &opts,
+            &cancel,
+            noop,
+        )
+        .unwrap();
+
+        let reopened = open_for_edit(&ct, secret(), &cancel, noop).unwrap();
+        assert_eq!(&**reopened.text, "second draft\n");
+    }
+
+    #[test]
+    fn editor_preserves_armor_on_save() {
+        let dir = tempdir().unwrap();
+        let plain = dir.path().join("a.txt");
+        let ct = dir.path().join("a.txt.paladin.asc");
+        write_file(&plain, b"armored text\n");
+        let mut job = encrypt_job(plain, ct.clone());
+        job.options.armor = true;
+        let cancel = AtomicBool::new(false);
+        run_job(job, &cancel, noop).unwrap();
+
+        let seed = open_for_edit(&ct, secret(), &cancel, noop).unwrap();
+        assert!(seed.armored, "the armor layer must be recorded at open");
+        let opts = SaveSource::from_metadata(&seed.metadata)
+            .options_for(seed.armored, &seed.path)
+            .unwrap();
+        assert!(opts.armor);
+        save_from_editor(b"still armored\n", &ct, &seed.secret, &opts, &cancel, noop).unwrap();
+
+        let bytes = fs::read(&ct).unwrap();
+        assert!(bytes.starts_with(b"-----BEGIN PALADIN MESSAGE-----"));
+        let reopened = open_for_edit(&ct, secret(), &cancel, noop).unwrap();
+        assert!(reopened.armored);
+        assert_eq!(&**reopened.text, "still armored\n");
+    }
+
+    #[test]
+    fn editor_preserves_the_stored_name_choice() {
+        let dir = tempdir().unwrap();
+        let plain = dir.path().join("orig.txt");
+        let ct = dir.path().join("orig.txt.paladin");
+        write_file(&plain, b"named text\n");
+        let mut job = encrypt_job(plain, ct.clone());
+        job.options.filename = Some("orig.txt".to_owned());
+        let cancel = AtomicBool::new(false);
+        run_job(job, &cancel, noop).unwrap();
+
+        let seed = open_for_edit(&ct, secret(), &cancel, noop).unwrap();
+        let opts = SaveSource::from_metadata(&seed.metadata)
+            .options_for(seed.armored, &seed.path)
+            .unwrap();
+        // The choice is preserved; the embedded name is the save target's.
+        assert_eq!(opts.filename.as_deref(), Some("orig.txt.paladin"));
+        save_from_editor(b"renamed inside\n", &ct, &seed.secret, &opts, &cancel, noop).unwrap();
+
+        let reopened = open_for_edit(&ct, secret(), &cancel, noop).unwrap();
+        let Metadata::Paladin(header) = &reopened.metadata else {
+            panic!("expected a paladin container");
+        };
+        assert_eq!(header.name.as_deref(), Some("orig.txt.paladin"));
+    }
+
+    #[test]
+    fn editor_open_wrong_password_is_auth() {
+        let (_dir, _plain, ct) = make_ciphertext(b"secret text");
+        let cancel = AtomicBool::new(false);
+        assert!(matches!(
+            open_for_edit(&ct, wrong_secret(), &cancel, noop),
+            Err(OpenError::Core(PalError::Auth))
+        ));
+    }
+
+    #[test]
+    fn editor_migrates_an_aes_crypt_source_after_confirmation() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("legacy.aes");
+        write_file(&path, AESCRYPT_V2);
+        let cancel = AtomicBool::new(false);
+        let aes_secret = || Secret::new(b"aescrypt test password", None).unwrap();
+
+        let seed = open_for_edit(&path, aes_secret(), &cancel, noop).unwrap();
+        assert!(matches!(seed.metadata, Metadata::AesCrypt(_)));
+        assert!(!seed.armored);
+        let expected: Vec<u8> = (0..17).collect();
+        assert_eq!(seed.text.as_bytes(), &expected[..]);
+
+        // The window shows the migration dialog before this save...
+        let mut source = SaveSource::from_metadata(&seed.metadata);
+        assert!(source.needs_migration_confirm());
+
+        // ...and on confirmation writes the derived options. That those derive
+        // to the §12 defaults is asserted in editor.rs; cheap KDF parameters
+        // keep this unoptimized test build fast through the same flow.
+        let mut opts = source.options_for(seed.armored, &path).unwrap();
+        opts.kdf_params = KdfParams::Argon2id {
+            memory_kib: 8192,
+            time_cost: 1,
+            parallelism: 1,
+        };
+        save_from_editor(b"migrated\n", &path, &seed.secret, &opts, &cancel, noop).unwrap();
+        source.saved(&opts);
+        assert!(!source.needs_migration_confirm());
+
+        // Same path, same .aes extension — but now a paladin container.
+        let reopened = open_for_edit(&path, aes_secret(), &cancel, noop).unwrap();
+        assert!(matches!(reopened.metadata, Metadata::Paladin(_)));
+        assert_eq!(&**reopened.text, "migrated\n");
+    }
+
+    #[test]
+    fn editor_open_fast_refuses_oversize_ciphertext() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("huge");
+        // Over the fast-refuse bound: rejected before any header parsing or
+        // KDF work, so the content need not be a valid container.
+        write_file(&path, &vec![0u8; EDITOR_MAX_BYTES * 2 + 1]);
+        let cancel = AtomicBool::new(false);
+        assert!(matches!(
+            open_for_edit(&path, secret(), &cancel, noop),
+            Err(OpenError::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn editor_open_aborts_at_the_streamed_cap() {
+        // Plaintext just over the cap but ciphertext under the fast-refuse
+        // bound: the bounded writer must catch it mid-stream.
+        let dir = tempdir().unwrap();
+        let plain = dir.path().join("big.txt");
+        let ct = dir.path().join("big.txt.paladin");
+        write_file(&plain, &vec![b'a'; EDITOR_MAX_BYTES + 1]);
+        let cancel = AtomicBool::new(false);
+        run_job(encrypt_job(plain, ct.clone()), &cancel, noop).unwrap();
+        assert!(fs::metadata(&ct).unwrap().len() <= OPEN_FAST_REFUSE);
+        assert!(matches!(
+            open_for_edit(&ct, secret(), &cancel, noop),
+            Err(OpenError::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn editor_open_rejects_binary_content_as_not_text() {
+        let dir = tempdir().unwrap();
+        let plain = dir.path().join("blob");
+        let ct = dir.path().join("blob.paladin");
+        write_file(&plain, &[0xff, 0xfe, 0x00, 0x01]);
+        let cancel = AtomicBool::new(false);
+        run_job(encrypt_job(plain, ct.clone()), &cancel, noop).unwrap();
+        assert!(matches!(
+            open_for_edit(&ct, secret(), &cancel, noop),
+            Err(OpenError::NotText)
+        ));
+    }
+
+    #[test]
+    fn editor_open_preset_cancel_is_canceled() {
+        let (_dir, _plain, ct) = make_ciphertext(b"cancel me");
+        let cancel = AtomicBool::new(true); // pre-set
+        assert!(matches!(
+            open_for_edit(&ct, secret(), &cancel, noop),
+            Err(OpenError::Core(PalError::Canceled))
+        ));
+    }
+
+    #[test]
+    fn editor_save_refuses_a_non_regular_target() {
+        let dir = tempdir().unwrap();
+        let cancel = AtomicBool::new(false);
+        let res = save_from_editor(b"x", dir.path(), &secret(), &cheap_opts(), &cancel, noop);
+        assert!(matches!(
+            res,
+            Err(RunError::Fs(FsError::OutputNotRegular(_)))
+        ));
+    }
+
+    #[test]
+    fn editor_saves_are_complete_fresh_encrypts() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("n.paladin");
+        let cancel = AtomicBool::new(false);
+        save_from_editor(
+            b"same text",
+            &target,
+            &secret(),
+            &cheap_opts(),
+            &cancel,
+            noop,
+        )
+        .unwrap();
+        let first = fs::read(&target).unwrap();
+        save_from_editor(
+            b"same text",
+            &target,
+            &secret(),
+            &cheap_opts(),
+            &cancel,
+            noop,
+        )
+        .unwrap();
+        let second = fs::read(&target).unwrap();
+        // DESIGN §11: every save uses a fresh salt and nonce prefix.
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn open_error_messages_are_nonempty_and_distinct() {
+        let too_large = OpenError::TooLarge.to_string();
+        let not_text = OpenError::NotText.to_string();
+        assert!(too_large.contains("8 MiB"));
+        assert!(!not_text.is_empty());
+        assert_ne!(too_large, not_text);
     }
 }
