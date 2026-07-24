@@ -10,13 +10,14 @@
 //! `Progress` and a terminal `RunSuccess`/`RunError` back as [`CommandOutput`],
 //! with cooperative cancellation and an overwrite-confirm dialog.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use adw::prelude::*;
 use relm4::prelude::*;
-use relm4::{Component, ComponentParts, ComponentSender};
+use relm4::{Component, ComponentParts, ComponentSender, Controller};
 use zeroize::Zeroizing;
 
 use paladin_core::{
@@ -24,12 +25,13 @@ use paladin_core::{
     EncryptOptions, KdfId, Metadata, Progress, Secret,
 };
 
+use crate::editor_window::{EditorInit, EditorOutput, EditorWindow};
 use crate::fsio::{self, FsError};
 use crate::info;
 use crate::message;
 use crate::mode::{Field, Mode};
 use crate::options::{self, KnobInput};
-use crate::task::{self, Job, RunError, RunSuccess};
+use crate::task::{self, EditorSeed, Job, OpenError, RunError, RunSuccess};
 
 /// The four ciphers/KDFs offered in the Advanced selectors, kept in a stable
 /// order so a `ComboRow` selection index maps back to the enum.
@@ -111,6 +113,11 @@ pub struct AppModel {
     info_text: Option<String>,
     /// Toast surface; toasts are emitted via [`adw::ToastOverlay::add_toast`].
     toast_overlay: adw::ToastOverlay,
+    /// Live editor windows by id (DESIGN §8.4). Removing an entry drops the
+    /// controller, shutting the component down and zeroizing its secret.
+    editors: HashMap<u64, Controller<EditorWindow>>,
+    /// The next editor-registry key.
+    next_editor_id: u64,
 }
 
 /// Messages handled in [`Component::update`].
@@ -152,6 +159,10 @@ pub enum AppInput {
     Run,
     /// Cancel the running worker operation.
     Cancel,
+    /// Open an empty editor window with no backing file (DESIGN §8.4).
+    NewNote,
+    /// An editor window closed; drop its controller (and session secret).
+    EditorClosed(u64),
 }
 
 /// Messages produced by the worker command and handled in
@@ -161,10 +172,14 @@ pub enum CommandOutput {
     Progress(Progress),
     /// The terminal result of the worker operation.
     Finished(Result<RunSuccess, RunError>),
+    /// The terminal result of an Edit-mode open (boxed: the seed carries the
+    /// decrypted text and secret).
+    EditorOpened(Box<Result<EditorSeed, OpenError>>),
 }
 
-// relm4's `Component` requires `CommandOutput: Debug`. `RunSuccess` is not
-// `Debug`, so format it by hand from its public field.
+// relm4's `Component` requires `CommandOutput: Debug`. `RunSuccess` and
+// `EditorSeed` are not `Debug` (the seed holds text and a secret), so format
+// them by hand without their contents.
 impl std::fmt::Debug for CommandOutput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -174,6 +189,10 @@ impl std::fmt::Debug for CommandOutput {
                 .field("remove_warning", &s.remove_warning)
                 .finish(),
             CommandOutput::Finished(Err(e)) => f.debug_tuple("Finished::Err").field(e).finish(),
+            CommandOutput::EditorOpened(result) => match result.as_ref() {
+                Ok(_) => f.write_str("EditorOpened::Ok(seed)"),
+                Err(e) => f.debug_tuple("EditorOpened::Err").field(e).finish(),
+            },
         }
     }
 }
@@ -677,11 +696,22 @@ impl Component for AppModel {
                                         },
 
                                         gtk::Button {
+                                            set_label: "New note",
+                                            #[watch]
+                                            set_visible: model.mode == Mode::Edit,
+                                            connect_clicked => AppInput::NewNote,
+                                        },
+
+                                        gtk::Button {
                                             add_css_class: "suggested-action",
                                             #[watch]
-                                            set_label: model.mode.title(),
+                                            set_label: model.mode.action_label(),
+                                            // Disabled only while a worker is
+                                            // running; terminal states leave
+                                            // the form ready for the next run.
                                             #[watch]
-                                            set_sensitive: matches!(model.run_state, RunState::Idle)
+                                            set_sensitive: !matches!(
+                                                model.run_state, RunState::Running { .. })
                                                 && model.input.is_some(),
                                             connect_clicked => AppInput::Run,
                                         },
@@ -717,6 +747,8 @@ impl Component for AppModel {
             run_state: RunState::Idle,
             info_text: None,
             toast_overlay: adw::ToastOverlay::new(),
+            editors: HashMap::new(),
+            next_editor_id: 0,
         };
 
         let toast_overlay = model.toast_overlay.clone();
@@ -831,6 +863,12 @@ impl Component for AppModel {
                     cancel.store(true, Ordering::Relaxed);
                 }
             }
+            AppInput::NewNote => self.spawn_editor(None, root, &sender),
+            AppInput::EditorClosed(id) => {
+                // Dropping the controller shuts the component down; its model
+                // (and the session `Secret` inside) drops and zeroizes.
+                self.editors.remove(&id);
+            }
         }
     }
 
@@ -909,6 +947,48 @@ impl Component for AppModel {
                 self.toast(&text);
                 self.overwrite_approved = false;
             }
+            CommandOutput::EditorOpened(result) => match *result {
+                Ok(seed) => {
+                    self.run_state = RunState::Done(self.success_summary());
+                    self.spawn_editor(Some(seed), root, &sender);
+                }
+                Err(OpenError::Core(ref ce)) if message::is_user_cancel(ce) => {
+                    self.run_state = RunState::Canceled;
+                    self.toast("Canceled");
+                }
+                // The two editor gates get explanatory dialogs pointing at
+                // Decrypt mode rather than a passing toast (DESIGN §8.4).
+                Err(OpenError::TooLarge) => {
+                    self.run_state = RunState::Idle;
+                    self.editor_gate_dialog(
+                        root,
+                        "File too large to edit",
+                        "The decrypted text exceeds the 8 MiB editor limit. \
+                         Use Decrypt mode to write it to a file and edit it \
+                         externally instead.",
+                    );
+                }
+                Err(OpenError::NotText) => {
+                    self.run_state = RunState::Idle;
+                    self.editor_gate_dialog(
+                        root,
+                        "Not a text file",
+                        "The decrypted content is not UTF-8 text, so it cannot \
+                         be edited here. Use Decrypt mode to write it to a \
+                         file instead.",
+                    );
+                }
+                Err(OpenError::Core(ce)) => {
+                    let text = message::user_message(&ce);
+                    self.run_state = RunState::Error(text.clone());
+                    self.toast(&text);
+                }
+                Err(OpenError::Fs(fe)) => {
+                    let text = fe.to_string();
+                    self.run_state = RunState::Error(text.clone());
+                    self.toast(&text);
+                }
+            },
         }
     }
 }
@@ -979,6 +1059,22 @@ impl AppModel {
                 return;
             }
         };
+
+        // --- Edit: decrypt to memory, then hand off to an editor window -----
+        if self.mode == Mode::Edit {
+            let cancel = Arc::new(AtomicBool::new(false));
+            self.run_state = RunState::Running {
+                fraction: 0.0,
+                cancel: cancel.clone(),
+            };
+            sender.spawn_command(move |out| {
+                let result = task::open_for_edit(&input, secret, &cancel, |p| {
+                    let _ = out.send(CommandOutput::Progress(p));
+                });
+                let _ = out.send(CommandOutput::EditorOpened(Box::new(result)));
+            });
+            return;
+        }
 
         // Encrypt needs full options; Decrypt/Verify ignore them.
         let options = if self.mode == Mode::Encrypt {
@@ -1086,6 +1182,42 @@ impl AppModel {
             }
             // `AlertDialog` closes itself once a response is chosen.
         });
+        dialog.present(Some(root));
+    }
+
+    /// Spawn an independent editor window (DESIGN §8.4) for an opened file's
+    /// seed, or an empty new note. The controller is kept in the registry so
+    /// the component lives until the window reports [`EditorOutput::Closed`].
+    fn spawn_editor(
+        &mut self,
+        seed: Option<EditorSeed>,
+        root: &<Self as Component>::Root,
+        sender: &ComponentSender<Self>,
+    ) {
+        let id = self.next_editor_id;
+        self.next_editor_id += 1;
+        let controller = EditorWindow::builder()
+            .launch(EditorInit { id, seed })
+            .forward(sender.input_sender(), |EditorOutput::Closed(id)| {
+                AppInput::EditorClosed(id)
+            });
+        // Editor windows are independent top-levels; registering them with
+        // the application keeps it (and their unsaved text) alive even if the
+        // main window closes first.
+        controller
+            .widget()
+            .set_application(root.application().as_ref());
+        controller.widget().present();
+        self.editors.insert(id, controller);
+    }
+
+    /// An explanatory dialog for the editor's open gates (too large /
+    /// not text), pointing the user at Decrypt mode (DESIGN §8.4).
+    fn editor_gate_dialog(&self, root: &<Self as Component>::Root, heading: &str, body: &str) {
+        let dialog = adw::AlertDialog::new(Some(heading), Some(body));
+        dialog.add_response("ok", "OK");
+        dialog.set_default_response(Some("ok"));
+        dialog.set_close_response("ok");
         dialog.present(Some(root));
     }
 

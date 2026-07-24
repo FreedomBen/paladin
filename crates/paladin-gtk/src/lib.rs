@@ -11,6 +11,7 @@
 
 pub mod app;
 pub mod editor;
+pub mod editor_window;
 pub mod fsio;
 pub mod info;
 pub mod message;
