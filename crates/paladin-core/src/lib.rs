@@ -95,6 +95,16 @@ pub fn inspect<R: Read>(input: R) -> Result<Metadata> {
     }
 }
 
+/// Report whether a file's leading bytes look like the §5.6 ASCII-armor layer,
+/// using the same rule as [`decrypt`]'s auto-detection: leading ASCII
+/// whitespace is skipped (bounded at 512 bytes) and the first non-whitespace
+/// byte decides. Front-ends record this when opening a file so they can
+/// re-encrypt it in kind (DESIGN §2.3, §8.4). A 512-byte prefix always decides
+/// exactly; in practice the first few bytes are plenty.
+pub fn is_armored(prefix: &[u8]) -> bool {
+    armor::detect_armored(prefix)
+}
+
 /// Verify integrity and the secret by decrypting and discarding the plaintext
 /// (DESIGN §6.2). Armor and container format are auto-detected.
 pub fn verify<R: Read>(
@@ -250,6 +260,50 @@ mod tests {
         };
         assert_eq!(meta.version, 2);
         assert_eq!(meta.created_by.as_deref(), Some("aescrypt 3.16.1"));
+    }
+
+    #[test]
+    fn is_armored_matches_what_decrypt_auto_detects() {
+        let data = b"armor agreement".to_vec();
+        for armored in [false, true] {
+            let ct = do_encrypt(&data, &opts(armored, None));
+            assert_eq!(is_armored(&ct), armored, "full file, armored={armored}");
+            // Front-ends read only a file's leading bytes; a short prefix must
+            // decide identically.
+            assert_eq!(is_armored(&ct[..8]), armored, "prefix, armored={armored}");
+        }
+    }
+
+    #[test]
+    fn is_armored_accepts_marker_lf_crlf_and_leading_whitespace() {
+        assert!(is_armored(b"-----BEGIN PALADIN MESSAGE-----\nAAAA\n"));
+        assert!(is_armored(
+            b"\r\n \t-----BEGIN PALADIN MESSAGE-----\r\nAAAA\r\n"
+        ));
+        // The rule decides on the first non-whitespace byte (like decrypt's
+        // auto-detect), so even a one-byte marker prefix is recognized.
+        assert!(is_armored(b"-"));
+    }
+
+    #[test]
+    fn is_armored_rejects_binary_truncated_and_empty_prefixes() {
+        assert!(!is_armored(b"PALADIN\0")); // binary magic
+        assert!(!is_armored(b"P")); // truncated binary magic
+        assert!(!is_armored(b"")); // empty
+        assert!(!is_armored(b" \t\r\n")); // all whitespace
+    }
+
+    #[test]
+    fn is_armored_whitespace_skip_is_bounded_like_auto_detect() {
+        // 511 leading whitespace bytes still reach the marker byte...
+        let mut almost = vec![b' '; 511];
+        almost.push(b'-');
+        assert!(is_armored(&almost));
+        // ...but at the 512-byte detection bound the input is treated as
+        // binary, exactly as decrypt's bounded auto-detection does.
+        let mut over = vec![b' '; 512];
+        over.push(b'-');
+        assert!(!is_armored(&over));
     }
 
     #[test]

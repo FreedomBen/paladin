@@ -276,29 +276,39 @@ impl<R: Read> Read for DearmorReader<R> {
     }
 }
 
-/// Detect armor by peeking past leading whitespace: the first non-whitespace
-/// byte is `-` for armored input and the binary magic `S` otherwise. The peeked
-/// bytes are preserved by chaining them ahead of the rest of the stream.
+/// The armor-detection rule, shared by [`auto_dearmor`] and the public
+/// [`crate::is_armored`] helper so both always agree: skip leading ASCII
+/// whitespace (bounded by [`DETECT_PEEK`]) and decide on the first
+/// non-whitespace byte — `-` opens the BEGIN marker line, while the binary
+/// container starts with its magic. No non-whitespace byte means binary.
+pub(crate) fn detect_armored(prefix: &[u8]) -> bool {
+    prefix
+        .iter()
+        .take(DETECT_PEEK)
+        .find(|b| !b.is_ascii_whitespace())
+        .is_some_and(|&b| b == b'-')
+}
+
+/// Detect armor by peeking past leading whitespace with [`detect_armored`].
+/// The peeked bytes are preserved by chaining them ahead of the rest of the
+/// stream.
 pub(crate) fn auto_dearmor<R: Read>(mut input: R) -> Result<DearmorReader<R>> {
     let mut peek = Vec::new();
     let mut byte = [0u8; 1];
-    let armored = loop {
+    loop {
         match input.read(&mut byte) {
-            Ok(0) => break false, // empty or all-whitespace: treat as binary
+            Ok(0) => break, // empty or all-whitespace: treat as binary
             Ok(_) => {
                 peek.push(byte[0]);
-                if byte[0].is_ascii_whitespace() {
-                    if peek.len() >= DETECT_PEEK {
-                        break false;
-                    }
-                    continue;
+                if !byte[0].is_ascii_whitespace() || peek.len() >= DETECT_PEEK {
+                    break;
                 }
-                break byte[0] == b'-';
             }
             Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(PalError::Io(e)),
         }
-    };
+    }
+    let armored = detect_armored(&peek);
     let combined = io::Cursor::new(peek).chain(input);
     if armored {
         Ok(DearmorReader::Armored(ArmorReader::new(combined)))
@@ -325,6 +335,32 @@ mod tests {
         r.read_to_end(&mut out)
             .map_err(|e| crate::error::recover_palerror(e).unwrap_or_else(PalError::Io))?;
         Ok(out)
+    }
+
+    #[test]
+    fn detect_armored_agrees_with_auto_dearmor() {
+        let mut over_bound = vec![b' '; DETECT_PEEK];
+        over_bound.push(b'-');
+        let cases: Vec<Vec<u8>> = vec![
+            armor(b"payload"),
+            b"PALADIN\0binary".to_vec(),
+            b"\r\n\t -----BEGIN PALADIN MESSAGE-----\n".to_vec(),
+            Vec::new(),
+            b"   \n".to_vec(),
+            over_bound,
+        ];
+        for case in cases {
+            let expected = matches!(
+                auto_dearmor(io::Cursor::new(case.clone())).unwrap(),
+                DearmorReader::Armored(_)
+            );
+            assert_eq!(
+                detect_armored(&case),
+                expected,
+                "detect/auto_dearmor disagree on {:?}…",
+                &case[..case.len().min(12)]
+            );
+        }
     }
 
     #[test]
