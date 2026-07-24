@@ -32,6 +32,13 @@ out-of-band parameters.
   and inspect foreign [AES Crypt](https://www.aescrypt.com/) (`.aes`) files
   (Stream Format 1 and 2), detected automatically. Encryption always writes
   paladin's own format; re-encrypt a decrypted `.aes` file to migrate it.
+- **In-app encrypted text editing (GTK)**: the desktop app's Edit tab opens a
+  small encrypted text file (up to 8 MiB of UTF-8) straight into an editor
+  window — plaintext never touches disk — and every save is a complete fresh
+  encrypt that preserves the file's cipher, KDF parameters, and armor. Legacy
+  `.aes` files open too and are migrated to paladin's format on save after an
+  explicit confirmation, and a "New note" button creates encrypted notes from
+  scratch.
 
 ## Architecture
 
@@ -45,7 +52,7 @@ the result.
 | `paladin-common` | lib                | Terminal glue shared by the CLI + TUI: path-or-stdin I/O, clobber check, secure remove, password resolution, exit-code mapping. |
 | `paladin-cli`    | bin `paladin`     | clap argument parsing; password resolution; calls the core.                                     |
 | `paladin-tui`    | bin `paladin-tui` | ratatui + crossterm interactive form. Reuses `paladin-common`.                                 |
-| `paladin-gtk`    | bin `paladin-gtk` | relm4 (gtk4-rs) + libadwaita desktop app.                                                       |
+| `paladin-gtk`    | bin `paladin-gtk` | relm4 (gtk4-rs) + libadwaita desktop app with an in-app encrypted text editor.                 |
 
 The core never reads argv, never prompts, never touches the filesystem on its
 own, never decides whether to overwrite, and never exits the process. It takes

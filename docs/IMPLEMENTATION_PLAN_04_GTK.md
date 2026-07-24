@@ -367,11 +367,11 @@ stored name.
 - [x] App icon: shared paladin logo as a full hicolor set (scalable +
   symbolic + 16–512 PNGs + source bitmaps), installed by `make install-gtk`
   and the nfpm packages, pinned by `tests/icon_assets.rs`.
-- [ ] Editor (§10): `is_armored` pure helper in `paladin-core` (+ tests; DESIGN §2.3).
-- [ ] Editor (§10): `Mode::Edit` + visibility rules in `mode.rs` (+ tests).
-- [ ] Editor (§10): `editor.rs` — bounded writer, UTF-8 gate, `save_options` (incl. AES Crypt → §12-defaults migration branch), new-note defaults, dirty/migration state (+ tests).
-- [ ] Editor (§10): `task.rs` open/save runners — round-trip, armor/name preservation, AES Crypt open + confirmed-migration save, cap enforcement, cancel cleanup (+ temp-dir tests).
-- [ ] Editor (§10): `editor_window.rs` — `TextView` + undo, Save / Save As / Ctrl+S, unsaved-changes and migration-confirmation dialogs, session-`Secret` lifecycle.
-- [ ] Editor (§10): new-note flow (output dialog, password + confirm, §12 defaults).
-- [ ] Editor (§10): manual UI verification items (step 7) completed.
-- [ ] Editor (§10): README feature mention once implemented.
+- [x] Editor (§10): `is_armored` pure helper in `paladin-core` (+ tests; DESIGN §2.3).
+- [x] Editor (§10): `Mode::Edit` + visibility rules in `mode.rs` (+ tests).
+- [x] Editor (§10): `editor.rs` — bounded writer, UTF-8 gate, `save_options` (via `SaveSource`, incl. AES Crypt → §12-defaults migration branch), new-note defaults, migration state (+ tests; dirty state rides the `GtkTextBuffer` modified flag).
+- [x] Editor (§10): `task.rs` open/save runners — round-trip, armor/name preservation, AES Crypt open + confirmed-migration save, cap enforcement, cancel cleanup (+ temp-dir tests).
+- [x] Editor (§10): `editor_window.rs` — `TextView` + undo, Save / Save As / Ctrl+S, unsaved-changes and migration-confirmation dialogs, session-`Secret` lifecycle (`Arc`, dropped on close).
+- [x] Editor (§10): new-note flow (output dialog, password + confirm, §12 defaults).
+- [ ] Editor (§10): manual UI verification items (step 7) completed. (Pending manual verification on a graphical session — this environment is headless.)
+- [x] Editor (§10): README feature mention once implemented.
