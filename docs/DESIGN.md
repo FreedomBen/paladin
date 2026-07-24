@@ -227,6 +227,10 @@ pub fn verify<R: Read>(input: R, secret: &Secret, input_len: Option<u64>,
 pub fn default_encrypt_output(input: &Path, armor: bool) -> PathBuf;
 pub fn default_decrypt_output(input: &Path, header: &Header) -> PathBuf;
 pub fn default_aescrypt_output(input: &Path) -> PathBuf;   // strips a trailing .aes (§5.8, §6.5)
+pub fn is_armored(prefix: &[u8]) -> bool;                  // §5.6 begin-marker test on a file's leading
+                                                           // bytes — the same rule decrypt's armor
+                                                           // auto-detect uses — so front-ends can
+                                                           // re-encrypt in kind (§8.4)
 ```
 
 `decrypt`, `verify`, and `inspect` auto-detect the container format after armor
@@ -915,10 +919,15 @@ output path), and run status/progress. UI events become `Input` messages —
 The model never calls crypto directly; it builds a `Secret` + `EncryptOptions`
 and invokes the core.
 
+Edit mode (§8.4) adds `OpenEditor` and `NewNote` inputs; each spawns a
+self-contained editor window component that owns its own text buffer, dirty
+flag, and session `Secret`, so the root `AppModel` holds no editor state.
+
 ### 8.2 Widgets (libadwaita)
 
 - `adw::ApplicationWindow` + `adw::ToolbarView` / `adw::HeaderBar`.
-- `adw::ViewStack` + `ViewSwitcher` for the Encrypt / Decrypt / Info / Verify modes.
+- `adw::ViewStack` + `ViewSwitcher` for the Encrypt / Decrypt / Info / Verify /
+  Edit modes (Edit: §8.4).
 - `adw::EntryRow` for paths, each with a "browse" button opening
   `gtk::FileDialog`; the output row is shown only for Encrypt / Decrypt and is
   prefilled from `core::default_*_output` (§6.5). The save dialog's native
@@ -949,6 +958,72 @@ core returns `PalError::Canceled`, and the GTK worker removes any temporary
 output it created and shows a non-error canceled state. A KDF call already
 running may finish before cancellation takes effect. The password is moved into
 the worker in a zeroizing buffer.
+
+### 8.4 Encrypted text editor (Edit mode)
+
+The GTK app is the one front-end that can view and edit small encrypted *text*
+files (notes, journals, config snippets) in place, replacing the
+decrypt-to-disk → edit → re-encrypt → delete dance during which plaintext sits
+on disk. It adds no crypto or format logic: opening and saving call the same
+core `decrypt`/`encrypt` over in-memory readers and writers, and the widget is
+GTK4's stock `gtk::TextView`/`GtkTextBuffer` — editing, clipboard, selection,
+input-method and accessibility support, and undo (`set_enable_undo(true)`)
+come with GTK, so no editor dependency is added (GtkSourceView is a possible
+later upgrade, §13).
+
+**Opening.** A fifth **Edit** view joins the `ViewStack`, showing the input
+row, password row, and keyfile row / keyfile-only toggle (no output row, no
+confirm row, no Advanced section) plus **Open** and **New note** actions. Open
+runs `decrypt` on the worker with the usual progress/cancel machinery (§8.3)
+into a `Zeroizing<Vec<u8>>` behind a bounded writer. Three gates apply, each
+refused with a specific dialog rather than a generic error:
+
+- **Size** — decrypted text is capped at **8 MiB** (§12). A file whose
+  ciphertext length already exceeds the cap plus container overhead is refused
+  before any KDF work; the bounded writer enforces the exact cap while
+  streaming. Larger files → Decrypt mode.
+- **Encoding** — the plaintext must be strict UTF-8, checked via an
+  allocation-reusing conversion so no stray plaintext copy is made. Binary
+  content → Decrypt mode.
+- **Format** — AES Crypt sources (§5.8) are refused with the migration
+  message: paladin never writes that format, so the editor could not save the
+  file back. Decrypt, then Encrypt (or New note), to migrate.
+
+**Editor window.** Each successful Open (or New note) spawns an independent
+editor component in its own window: a monospace, word-wrapping `gtk::TextView`
+in a `gtk::ScrolledWindow`, buffer undo enabled, a header bar showing the
+file's basename plus a modified indicator, and **Save** (Ctrl+S) / **Save As**
+actions. Closing a modified editor raises an `adw::AlertDialog`
+(Save / Discard / Cancel).
+
+**Saving.** Every save is a complete fresh `encrypt` of the buffer contents —
+new random salt and new nonce prefix, never a rewrite under the old file key —
+so the §11 nonce-uniqueness argument is unchanged. Options derive from the
+opened file's `Header`: same cipher, KDF, KDF parameters, and chunk size; the
+stored-name choice is preserved (a source that stored a name stores the
+output's basename); armor is re-applied as recorded at open via `is_armored`
+(§2.3). Output flows through the same sibling-temp + atomic-rename path as
+every other file output (§6.5), so a crash mid-save leaves the original file
+intact. Saving over the file that was opened skips the overwrite
+confirmation — that is what Save means — while Save As gets the native
+dialog's confirmation like any other output.
+
+**New note.** Opens an empty editor with no backing file. The first Save asks
+for an output path, then password + confirm in a dialog, and encrypts with the
+§12 defaults (binary container, no stored name). Keyfiles and non-default
+cipher/KDF choices for brand-new files remain Encrypt-mode features.
+
+**Secret lifecycle.** The `Secret` that opened (or first saved) the file is
+retained by the editor component in zeroizing buffers for the window's
+lifetime — Save never re-prompts — and dropped when the window closes. The
+decrypted transfer buffer is zeroized once its contents enter the widget.
+Plaintext never touches disk: no autosave, no crash-recovery files, no
+plaintext temporaries. Widget memory itself cannot be zeroized; §11 states
+that trade-off, and §3 already places the compromised-host attacker out of
+scope.
+
+**Non-goals (v1)** are listed in §13: CLI/TUI editors, autosave/recovery
+files, external-change detection (last write wins), and syntax highlighting.
 
 ---
 
@@ -1026,7 +1101,8 @@ chosen for being pure-Rust and widely reviewed.
 - Pure helpers: `default_encrypt_output` / `default_decrypt_output` (including
   the empty-basename fallback, e.g. `.paladin` → `.paladin.dec`) and
   exact lowercase cipher/KDF `FromStr`/`Display` round-trips with alias/case
-  rejection.
+  rejection; and `is_armored` on marker, non-marker, truncated, and empty
+  prefixes (LF and CRLF), agreeing with decrypt's armor auto-detect.
 
 **Round-trip** (parameterized over sizes: 0, 1, `chunk_size−1`, `chunk_size`,
 `chunk_size+1`, several MiB; exercised at both the minimum and the default 64 KiB
@@ -1150,6 +1226,18 @@ Per repo convention, tests accompany every code change.
   (when v3 lands), and body size are bounded against hostile input. paladin
   never *writes* this format; re-encrypting decrypted data with paladin's own
   authenticated format is the recommended migration.
+- **The GTK editor holds plaintext in widget memory (§8.4).** While a file is
+  open for editing, its text lives in the `GtkTextBuffer` and its undo stack —
+  ordinary heap memory that cannot be zeroized. That exposure (plus clipboard,
+  screenshots, and accessibility/AT-SPI readers) is the compromised-host class
+  §3 already places out of scope. In exchange, the editor never writes
+  plaintext to disk — no autosave, no crash-recovery files, no plaintext
+  temporaries — and the 8 MiB cap (§12) bounds resident plaintext. Every save
+  is a complete fresh encrypt with a new salt and nonce prefix, never a
+  rewrite under the old file key, so the nonce-uniqueness argument above is
+  unchanged. The session secret is held in zeroizing buffers for the editor
+  window's lifetime and dropped on close; the decrypted transfer buffer is
+  zeroized once its contents enter the widget.
 
 Per repo policy, these implications are flagged for confirmation before
 implementation begins, and tests in §10 verify each integrity property.
@@ -1171,6 +1259,7 @@ implementation begins, and tests in §10 verify each integrity property.
 | Nonce prefix         | 7 bytes (12-byte STREAM nonce)  |
 | Chunk size           | 65536 bytes (64 KiB)            |
 | Plaintext size cap   | 64 GiB                          |
+| GTK editor text cap  | 8 MiB (§8.4)                    |
 | Key length           | 32 bytes (256-bit)              |
 | Tag length           | 16 bytes (128-bit)              |
 | Output extension     | `.paladin` (`.paladin.asc` armored) |
@@ -1188,6 +1277,13 @@ multi-recipient files, special handling of Windows reserved device names (`CON`,
 `NUL`, …) in stored filenames, and HKDF-based per-file subkey separation (the
 random-salt-per-file design already prevents key reuse except on salt collision
 or RNG failure; HKDF separation is a possible hardening later).
+
+For the GTK editor (§8.4): editor equivalents in the CLI/TUI front-ends,
+autosave or crash-recovery files, detection of external modification while a
+file is open (last write wins), syntax highlighting (GtkSourceView is a
+candidate later upgrade from `GtkTextView`), opening AES Crypt sources for
+editing, and editing text beyond the 8 MiB cap or non-UTF-8 content — decrypt
+to a file and edit externally instead.
 
 ---
 
@@ -1233,6 +1329,13 @@ All open questions are now settled:
       strings with no aliases; non-UTF-8 OS-native paths are allowed except
       where text is stored in the header; and password-file/env sources are
       CLI-only (§4, §6, §7, §8).
+- [x] **GTK in-app text editor.** Edit mode is GTK-only and text-only: decrypt
+      to memory behind an 8 MiB bounded buffer, require strict UTF-8, edit in
+      a stock `gtk::TextView`, and save as a complete fresh encrypt (new salt
+      and nonce prefix) that preserves the source's cipher/KDF/parameters,
+      stored-name choice, and armor. Plaintext never touches disk; the session
+      secret is held zeroized for the editor window's lifetime; AES Crypt
+      sources are refused with the migration message (§8.4, §11, §12, §13).
 
 ---
 

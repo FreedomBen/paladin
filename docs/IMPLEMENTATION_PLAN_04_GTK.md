@@ -39,6 +39,7 @@ only calls these — it never re-derives behavior:
 | `Progress { done, total }` · `OnProgress` (`-> ControlFlow<()>`) | Stream progress; `Break` cancels. |
 | `Header` (`version`, `cipher`, `kdf`, `kdf_params`, `flags`, `keyfile_hint`, `chunk_size`, `salt_len`, `nonce_prefix_len`, `name`, `name_status`) · `NameStatus` | Render Info mode. |
 | `PalError` (`Auth`, `BadMagic`, `UnsupportedVersion`, `UnknownCipher`, `UnknownKdf`, `ReservedFlags`, `MalformedHeader`, `InvalidOptions`, `InputTooLarge`, `Canceled`, `Io`) | Map to user-facing toast/dialog text. |
+| `is_armored(prefix: &[u8]) -> bool` — **new**, DESIGN §2.3 | Recorded at editor open so Save re-armors in kind (§10). Small TDD addition to `paladin-core`, factored from the armor module's begin-marker detection so it shares one rule with decrypt's auto-dearmor. |
 
 `CipherId`/`KdfId` provide `FromStr`/`Display` (exact lowercase
 names, no aliases) so the Advanced selectors and Info display reuse the shared
@@ -53,12 +54,14 @@ unit-testable without a display (DESIGN §10). Proposed `crates/paladin-gtk/src/
 | --- | --- | --- |
 | `main.rs` | `adw::Application` bootstrap; init libadwaita; run `AppModel`. | manual |
 | `app.rs` | Root relm4 component: `AppModel`, `AppInput`, `CommandOutput`, `view!`, `update`, `update_cmd`. | manual |
-| `mode.rs` | `Mode` enum (Encrypt/Decrypt/Info/Verify) + per-mode field visibility rules. | unit |
+| `mode.rs` | `Mode` enum (Encrypt/Decrypt/Info/Verify/Edit) + per-mode field visibility rules. | unit |
 | `options.rs` | Build `EncryptOptions` + secret material from model state; confirm-match; cipher/KDF/knob assembly; `--name` basename derivation. | unit |
 | `fsio.rs` | GTK-native file glue: regular-file check, same-file/self-overwrite check, sibling temp-file finalization (mode `0600` on Unix), best-effort remove, keyfile read (1 B..=1 MiB). | unit + temp-dir |
 | `task.rs` | Off-thread crypto runner: orchestrate open → temp output → core call → commit/rollback; owns the cancel flag and progress throttling. | temp-dir |
 | `message.rs` | `PalError` → user-facing string; the `Auth` single-condition message (DESIGN §4.4). | unit |
 | `info.rs` | Format a `Header` into display rows (same fields/order as CLI `--info`, DESIGN §6.2). | unit |
+| `editor.rs` | Editor pure logic (§10): bounded plaintext writer (8 MiB cap), strict UTF-8 gate, save-option derivation from the opened `Header` + armor flag, new-note defaults, dirty tracking. | unit |
+| `editor_window.rs` | Editor window relm4 component (§10): `TextView` + undo, title/modified state, Save / Save As / Ctrl+S, unsaved-changes dialog, first-save password dialog, session `Secret` ownership. | manual |
 
 `fsio.rs` deliberately re-implements the finalize/same-file/keyfile logic that
 `paladin-common` provides for the terminal front-ends, because GTK does not
@@ -253,6 +256,78 @@ and test it; verify the UI by hand.**
 
 ---
 
+## 10. Encrypted text editor (DESIGN §8.4)
+
+Adds the fifth **Edit** mode: decrypt small text files to memory, edit in a
+`gtk::TextView`, save as a complete fresh encrypt. No new widget dependency —
+GTK4's `TextView`/`TextBuffer` already provides editing, clipboard, selection,
+IM/accessibility support, and undo (`buffer.set_enable_undo(true)`);
+GtkSourceView (line numbers, highlighting) is explicitly out of scope for v1
+(DESIGN §13) and would add a system library to the nfpm packages if adopted
+later.
+
+**Core surface.** The same `decrypt`/`encrypt` over in-memory I/O
+(`Cursor`/slice in, `Vec<u8>` behind the bounded writer out) plus one new pure
+helper, `is_armored(prefix: &[u8]) -> bool` (DESIGN §2.3), TDD'd in
+`paladin-core` first: marker, non-marker, truncated, and empty prefixes, LF
+and CRLF, agreeing with `auto_dearmor`.
+
+**Open flow** (`task.rs::open_for_edit`): regular-file check → fast-refuse
+when the ciphertext length already exceeds cap + container overhead (before
+any KDF work) → `inspect`; refuse `Metadata::AesCrypt` with the migration
+message (paladin never writes that format, DESIGN §5.8/§8.4) → read the
+leading bytes, record `is_armored` → `decrypt` on the worker into the bounded
+writer (8 MiB; overflow aborts the run) → strict UTF-8 via an
+allocation-reusing conversion (no stray plaintext copy) → hand an
+`EditorSeed { text, header, armored, path, secret }` to the new window.
+Progress/cancel identical to other runs; oversize / non-UTF-8 / AES Crypt get
+editor-specific dialogs pointing at Decrypt mode, other errors map through
+`message.rs` as usual.
+
+**Save flow** (`task.rs::save_from_editor`): `editor.rs::save_options` derives
+`EncryptOptions` from the seed — cipher/KDF/params/chunk size from the opened
+`Header`; `filename` = output basename iff the source stored a name; `armor`
+as recorded — then `encrypt` from the buffer bytes through the existing
+`fsio::OutputFile` sibling-temp + atomic-rename path. Saving over the opened
+path skips the overwrite prompt (that is what Save means); Save As uses the
+native dialog's confirmation. Every save is a fresh salt + nonce prefix
+(DESIGN §11); the old file key is never reused.
+
+**Component.** Each Open / New note spawns an independent `EditorWindow`
+component in its own `adw::Window`, owning the buffer, dirty flag, and session
+`Secret` (zeroizing; dropped on close — Save never re-prompts). The root
+`AppModel` gains only `OpenEditor`/`NewNote` inputs plus Edit-mode field
+visibility (input/password/keyfile rows; no output, confirm, or Advanced).
+Unsaved changes on close ⇒ `adw::AlertDialog` (Save / Discard / Cancel).
+New note: empty buffer, no backing file; first Save = output `FileDialog`,
+then a password + confirm dialog, DESIGN §12 defaults, binary container, no
+stored name.
+
+**Ordered steps (TDD where testable):**
+
+1. `paladin-core`: `is_armored` (+ tests first); export per DESIGN §2.3.
+2. `mode.rs`: add `Mode::Edit` + visibility rules (+ tests: input/password/
+   keyfile shown; output/confirm/Advanced hidden).
+3. `editor.rs` (+ tests first): bounded-writer cap semantics (below/at/above,
+   exact boundary), UTF-8 gate (valid/invalid/empty), `save_options`
+   derivation (each cipher/KDF, name kept/omitted, armor on/off), new-note
+   defaults, dirty-state transitions.
+4. `task.rs::open_for_edit` / `save_from_editor` (+ temp-dir tests): full
+   edit round-trip (open → mutate → save → reopen), armor and stored-name
+   preservation, wrong password ⇒ `Auth`, AES Crypt refusal, oversize
+   fast-refuse and streamed-cap abort, canceled open leaves nothing behind.
+5. `editor_window.rs` component + `app.rs` wiring (manual).
+6. New-note flow (manual; its option defaults covered by step 3 tests).
+7. Manual verification additions (append to the §8 checklist): open/edit/save
+   round-trip in the UI; modified indicator and all three unsaved-changes
+   dialog paths; Ctrl+S; Save As overwrite confirmation; non-UTF-8, oversize,
+   and AES Crypt dialogs; new-note first save incl. password mismatch; undo/
+   redo and clipboard behave; closing drops the secret (reopening re-prompts).
+8. Docs: README feature mention when implemented; DESIGN §9 needs no new
+   dependency row (`TextView` ships with gtk4).
+
+---
+
 ## Checklist
 
 - [x] Add GTK deps (relm4, relm4-components, libadwaita, gtk4, anyhow, tempfile, zeroize); note `zeroize` in DESIGN §9.
@@ -277,3 +352,11 @@ and test it; verify the UI by hand.**
 - [x] App icon: shared paladin logo as a full hicolor set (scalable +
   symbolic + 16–512 PNGs + source bitmaps), installed by `make install-gtk`
   and the nfpm packages, pinned by `tests/icon_assets.rs`.
+- [ ] Editor (§10): `is_armored` pure helper in `paladin-core` (+ tests; DESIGN §2.3).
+- [ ] Editor (§10): `Mode::Edit` + visibility rules in `mode.rs` (+ tests).
+- [ ] Editor (§10): `editor.rs` — bounded writer, UTF-8 gate, `save_options`, new-note defaults, dirty state (+ tests).
+- [ ] Editor (§10): `task.rs` open/save runners — round-trip, armor/name preservation, AES Crypt refusal, cap enforcement, cancel cleanup (+ temp-dir tests).
+- [ ] Editor (§10): `editor_window.rs` — `TextView` + undo, Save / Save As / Ctrl+S, unsaved-changes dialog, session-`Secret` lifecycle.
+- [ ] Editor (§10): new-note flow (output dialog, password + confirm, §12 defaults).
+- [ ] Editor (§10): manual UI verification items (step 7) completed.
+- [ ] Editor (§10): README feature mention once implemented.
