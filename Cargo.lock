@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "paladin-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -1677,7 +1677,7 @@ dependencies = [
 
 [[package]]
 name = "paladin-common"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "paladin-core",
  "tempfile",
@@ -1687,7 +1687,7 @@ dependencies = [
 
 [[package]]
 name = "paladin-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -1708,7 +1708,7 @@ dependencies = [
 
 [[package]]
 name = "paladin-gtk"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "gtk4",
@@ -1722,7 +1722,7 @@ dependencies = [
 
 [[package]]
 name = "paladin-tui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
