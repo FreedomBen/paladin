@@ -60,8 +60,8 @@ unit-testable without a display (DESIGN §10). Proposed `crates/paladin-gtk/src/
 | `task.rs` | Off-thread crypto runner: orchestrate open → temp output → core call → commit/rollback; owns the cancel flag and progress throttling. | temp-dir |
 | `message.rs` | `PalError` → user-facing string; the `Auth` single-condition message (DESIGN §4.4). | unit |
 | `info.rs` | Format a `Header` into display rows (same fields/order as CLI `--info`, DESIGN §6.2). | unit |
-| `editor.rs` | Editor pure logic (§10): bounded plaintext writer (8 MiB cap), strict UTF-8 gate, save-option derivation from the opened `Header` + armor flag, new-note defaults, dirty tracking. | unit |
-| `editor_window.rs` | Editor window relm4 component (§10): `TextView` + undo, title/modified state, Save / Save As / Ctrl+S, unsaved-changes dialog, first-save password dialog, session `Secret` ownership. | manual |
+| `editor.rs` | Editor pure logic (§10): bounded plaintext writer (8 MiB cap), strict UTF-8 gate, save-option derivation from the opened metadata (paladin `Header`, or §12 defaults for an AES Crypt migration) + armor flag, new-note defaults, dirty tracking. | unit |
+| `editor_window.rs` | Editor window relm4 component (§10): `TextView` + undo, title/modified state, Save / Save As / Ctrl+S, unsaved-changes dialog, AES Crypt migration confirmation, first-save password dialog, session `Secret` ownership. | manual |
 
 `fsio.rs` deliberately re-implements the finalize/same-file/keyfile logic that
 `paladin-common` provides for the terminal front-ends, because GTK does not
@@ -274,24 +274,33 @@ and CRLF, agreeing with `auto_dearmor`.
 
 **Open flow** (`task.rs::open_for_edit`): regular-file check → fast-refuse
 when the ciphertext length already exceeds cap + container overhead (before
-any KDF work) → `inspect`; refuse `Metadata::AesCrypt` with the migration
-message (paladin never writes that format, DESIGN §5.8/§8.4) → read the
+any KDF work) → `inspect`, keeping the `Metadata` so the seed knows whether
+the source is a paladin or AES Crypt container (DESIGN §5.8/§8.4) → read the
 leading bytes, record `is_armored` → `decrypt` on the worker into the bounded
 writer (8 MiB; overflow aborts the run) → strict UTF-8 via an
 allocation-reusing conversion (no stray plaintext copy) → hand an
-`EditorSeed { text, header, armored, path, secret }` to the new window.
-Progress/cancel identical to other runs; oversize / non-UTF-8 / AES Crypt get
+`EditorSeed { text, metadata, armored, path, secret }` to the new window.
+Progress/cancel identical to other runs; oversize / non-UTF-8 get
 editor-specific dialogs pointing at Decrypt mode, other errors map through
 `message.rs` as usual.
 
 **Save flow** (`task.rs::save_from_editor`): `editor.rs::save_options` derives
-`EncryptOptions` from the seed — cipher/KDF/params/chunk size from the opened
-`Header`; `filename` = output basename iff the source stored a name; `armor`
-as recorded — then `encrypt` from the buffer bytes through the existing
-`fsio::OutputFile` sibling-temp + atomic-rename path. Saving over the opened
-path skips the overwrite prompt (that is what Save means); Save As uses the
-native dialog's confirmation. Every save is a fresh salt + nonce prefix
-(DESIGN §11); the old file key is never reused.
+`EncryptOptions` from the seed — for a paladin source, cipher/KDF/params/chunk
+size from the opened `Header`, `filename` = output basename iff the source
+stored a name; for an AES Crypt source, the §12 defaults with no stored name;
+`armor` as recorded either way — then `encrypt` from the buffer bytes through
+the existing `fsio::OutputFile` sibling-temp + atomic-rename path. An AES
+Crypt seed's first save is a migration and must be confirmed first: an
+`adw::AlertDialog` warns that the file is an AES Crypt source and will be
+migrated to the paladin format on proceed (same path — the `.aes` extension
+keeps its name while the format changes; paladin reads auto-detect the
+container); Cancel writes nothing and leaves the buffer dirty. After a
+successful migration save the seed flips to paladin semantics (options = what
+was just written), so later saves show no dialog. paladin never writes the
+AES Crypt format (DESIGN §5.8). Saving over the opened path skips the
+overwrite prompt (that is what Save means); Save As uses the native dialog's
+confirmation. Every save is a fresh salt + nonce prefix (DESIGN §11); the old
+file key is never reused.
 
 **Component.** Each Open / New note spawns an independent `EditorWindow`
 component in its own `adw::Window`, owning the buffer, dirty flag, and session
@@ -310,19 +319,25 @@ stored name.
    keyfile shown; output/confirm/Advanced hidden).
 3. `editor.rs` (+ tests first): bounded-writer cap semantics (below/at/above,
    exact boundary), UTF-8 gate (valid/invalid/empty), `save_options`
-   derivation (each cipher/KDF, name kept/omitted, armor on/off), new-note
-   defaults, dirty-state transitions.
+   derivation (each cipher/KDF, name kept/omitted, armor on/off, and the AES
+   Crypt → §12-defaults migration branch), new-note defaults, dirty-state and
+   migration-state transitions.
 4. `task.rs::open_for_edit` / `save_from_editor` (+ temp-dir tests): full
    edit round-trip (open → mutate → save → reopen), armor and stored-name
-   preservation, wrong password ⇒ `Auth`, AES Crypt refusal, oversize
+   preservation, wrong password ⇒ `Auth`, an AES Crypt migration round-trip
+   (open a committed `.aes` fixture from `paladin-core/tests/data/aescrypt/`
+   → migrated save produces a paladin container that reopens), oversize
    fast-refuse and streamed-cap abort, canceled open leaves nothing behind.
 5. `editor_window.rs` component + `app.rs` wiring (manual).
 6. New-note flow (manual; its option defaults covered by step 3 tests).
 7. Manual verification additions (append to the §8 checklist): open/edit/save
    round-trip in the UI; modified indicator and all three unsaved-changes
-   dialog paths; Ctrl+S; Save As overwrite confirmation; non-UTF-8, oversize,
-   and AES Crypt dialogs; new-note first save incl. password mismatch; undo/
-   redo and clipboard behave; closing drops the secret (reopening re-prompts).
+   dialog paths; Ctrl+S; Save As overwrite confirmation; non-UTF-8 and
+   oversize dialogs; AES Crypt migration confirmation both ways (proceed ⇒
+   file becomes a paladin container and later saves show no dialog; cancel ⇒
+   file untouched, buffer stays dirty); new-note first save incl. password
+   mismatch; undo/redo and clipboard behave; closing drops the secret
+   (reopening re-prompts).
 8. Docs: README feature mention when implemented; DESIGN §9 needs no new
    dependency row (`TextView` ships with gtk4).
 
@@ -354,9 +369,9 @@ stored name.
   and the nfpm packages, pinned by `tests/icon_assets.rs`.
 - [ ] Editor (§10): `is_armored` pure helper in `paladin-core` (+ tests; DESIGN §2.3).
 - [ ] Editor (§10): `Mode::Edit` + visibility rules in `mode.rs` (+ tests).
-- [ ] Editor (§10): `editor.rs` — bounded writer, UTF-8 gate, `save_options`, new-note defaults, dirty state (+ tests).
-- [ ] Editor (§10): `task.rs` open/save runners — round-trip, armor/name preservation, AES Crypt refusal, cap enforcement, cancel cleanup (+ temp-dir tests).
-- [ ] Editor (§10): `editor_window.rs` — `TextView` + undo, Save / Save As / Ctrl+S, unsaved-changes dialog, session-`Secret` lifecycle.
+- [ ] Editor (§10): `editor.rs` — bounded writer, UTF-8 gate, `save_options` (incl. AES Crypt → §12-defaults migration branch), new-note defaults, dirty/migration state (+ tests).
+- [ ] Editor (§10): `task.rs` open/save runners — round-trip, armor/name preservation, AES Crypt open + confirmed-migration save, cap enforcement, cancel cleanup (+ temp-dir tests).
+- [ ] Editor (§10): `editor_window.rs` — `TextView` + undo, Save / Save As / Ctrl+S, unsaved-changes and migration-confirmation dialogs, session-`Secret` lifecycle.
 - [ ] Editor (§10): new-note flow (output dialog, password + confirm, §12 defaults).
 - [ ] Editor (§10): manual UI verification items (step 7) completed.
 - [ ] Editor (§10): README feature mention once implemented.

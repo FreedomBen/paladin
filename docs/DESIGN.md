@@ -975,7 +975,7 @@ later upgrade, §13).
 row, password row, and keyfile row / keyfile-only toggle (no output row, no
 confirm row, no Advanced section) plus **Open** and **New note** actions. Open
 runs `decrypt` on the worker with the usual progress/cancel machinery (§8.3)
-into a `Zeroizing<Vec<u8>>` behind a bounded writer. Three gates apply, each
+into a `Zeroizing<Vec<u8>>` behind a bounded writer. Two gates apply, each
 refused with a specific dialog rather than a generic error:
 
 - **Size** — decrypted text is capped at **8 MiB** (§12). A file whose
@@ -985,9 +985,10 @@ refused with a specific dialog rather than a generic error:
 - **Encoding** — the plaintext must be strict UTF-8, checked via an
   allocation-reusing conversion so no stray plaintext copy is made. Binary
   content → Decrypt mode.
-- **Format** — AES Crypt sources (§5.8) are refused with the migration
-  message: paladin never writes that format, so the editor could not save the
-  file back. Decrypt, then Encrypt (or New note), to migrate.
+
+AES Crypt sources (§5.8) open like any other file — `decrypt` auto-detects the
+container — but the editor records the source format, because saving one is a
+migration that must be confirmed (below).
 
 **Editor window.** Each successful Open (or New note) spawns an independent
 editor component in its own window: a monospace, word-wrapping `gtk::TextView`
@@ -998,15 +999,28 @@ actions. Closing a modified editor raises an `adw::AlertDialog`
 
 **Saving.** Every save is a complete fresh `encrypt` of the buffer contents —
 new random salt and new nonce prefix, never a rewrite under the old file key —
-so the §11 nonce-uniqueness argument is unchanged. Options derive from the
-opened file's `Header`: same cipher, KDF, KDF parameters, and chunk size; the
-stored-name choice is preserved (a source that stored a name stores the
+so the §11 nonce-uniqueness argument is unchanged. For a paladin source,
+options derive from its `Header`: same cipher, KDF, KDF parameters, and chunk
+size; the stored-name choice is preserved (a source that stored a name stores the
 output's basename); armor is re-applied as recorded at open via `is_armored`
 (§2.3). Output flows through the same sibling-temp + atomic-rename path as
 every other file output (§6.5), so a crash mid-save leaves the original file
 intact. Saving over the file that was opened skips the overwrite
 confirmation — that is what Save means — while Save As gets the native
 dialog's confirmation like any other output.
+
+**Saving an AES Crypt source is a migration.** paladin never writes the AES
+Crypt format (§5.8), and an AES Crypt header carries no paladin parameters to
+derive from. The first save of an AES Crypt-sourced editor therefore raises an
+`adw::AlertDialog` warning that the file is an AES Crypt source and will be
+migrated to the paladin format if the user proceeds; Cancel writes nothing and
+leaves the buffer dirty. On confirmation the buffer is encrypted as a paladin
+container with the §12 defaults (no stored name; armor as recorded at open) to
+the same path — the dialog notes that the file's name, including any `.aes`
+extension, stays the same even though its format does not (paladin's reads
+auto-detect the container regardless of extension). After a successful
+migration save the editor treats the file as a paladin source: subsequent
+saves derive options from what was just written and show no dialog.
 
 **New note.** Opens an empty editor with no backing file. The first Save asks
 for an output path, then password + confirm in a dialog, and encrypts with the
@@ -1225,7 +1239,8 @@ Per repo convention, tests accompany every code change.
   compared in constant time, and extension count/size, the v3 iteration count
   (when v3 lands), and body size are bounded against hostile input. paladin
   never *writes* this format; re-encrypting decrypted data with paladin's own
-  authenticated format is the recommended migration.
+  authenticated format is the recommended migration (the GTK editor automates
+  this for small text files via its confirm-then-migrate save, §8.4).
 - **The GTK editor holds plaintext in widget memory (§8.4).** While a file is
   open for editing, its text lives in the `GtkTextBuffer` and its undo stack —
   ordinary heap memory that cannot be zeroized. That exposure (plus clipboard,
@@ -1281,9 +1296,10 @@ or RNG failure; HKDF separation is a possible hardening later).
 For the GTK editor (§8.4): editor equivalents in the CLI/TUI front-ends,
 autosave or crash-recovery files, detection of external modification while a
 file is open (last write wins), syntax highlighting (GtkSourceView is a
-candidate later upgrade from `GtkTextView`), opening AES Crypt sources for
-editing, and editing text beyond the 8 MiB cap or non-UTF-8 content — decrypt
-to a file and edit externally instead.
+candidate later upgrade from `GtkTextView`), saving back into the AES Crypt
+format (an AES Crypt source opens fine, but its confirmed save always produces
+a paladin container, §8.4), and editing text beyond the 8 MiB cap or non-UTF-8
+content — decrypt to a file and edit externally instead.
 
 ---
 
@@ -1335,7 +1351,9 @@ All open questions are now settled:
       and nonce prefix) that preserves the source's cipher/KDF/parameters,
       stored-name choice, and armor. Plaintext never touches disk; the session
       secret is held zeroized for the editor window's lifetime; AES Crypt
-      sources are refused with the migration message (§8.4, §11, §12, §13).
+      sources open for editing, and their first save migrates to the paladin
+      format behind a confirmation dialog — paladin still never writes AES
+      Crypt (§5.8, §8.4, §11, §12, §13).
 
 ---
 
