@@ -1,1 +1,0 @@
-Paladin Auth import bundle is plaintext; v0.1 imports require encrypted bundles
