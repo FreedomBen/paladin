@@ -124,7 +124,7 @@ fn ci_packaging_dry_run_job_has_a_human_readable_name() {
 
 #[test]
 fn ci_packaging_dry_run_job_runs_in_a_fedora_container() {
-    // The clippy / test jobs both use `fedora:42` so the GTK 4.16 +
+    // The clippy / test jobs both use `fedora:44` so the GTK 4.16 +
     // libadwaita 1.6 floor resolves against the system headers
     // without a PPA dance. The packaging dry-run still needs to
     // `cargo build -p paladin-gtk` (which pulls those system
@@ -133,8 +133,8 @@ fn ci_packaging_dry_run_job_runs_in_a_fedora_container() {
     let job = extract_packaging_dry_run_job(&workflow)
         .expect("packaging-dry-run job must exist; see ci_workflow_declares_packaging_dry_run_job");
     assert!(
-        job.contains("fedora:42"),
-        "packaging-dry-run job must run inside the `fedora:42` container so GTK 4.16 + \
+        job.contains("fedora:44"),
+        "packaging-dry-run job must run inside the `fedora:44` container so GTK 4.16 + \
          libadwaita 1.6 headers are available for the release-binary build; got:\n{job}",
     );
 }

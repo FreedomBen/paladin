@@ -104,7 +104,7 @@ Paladin needs a Rust toolchain plus a few system packages — `gcc`,
 `pkg-config`, `openssl-devel`, and (for `paladin-gtk`) GTK4 ≥ 4.16 and
 libadwaita ≥ 1.6 development headers. The CI gate
 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) builds inside a
-`fedora:42` container, which is the reference environment.
+`fedora:44` container, which is the reference environment.
 
 On Fedora 42+:
 

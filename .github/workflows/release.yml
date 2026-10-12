@@ -28,7 +28,7 @@ jobs:
     # job in ci.yml uses, so the release pipeline exercises the exact same
     # toolchain + system headers the CI gate validates on every push.
     container:
-      image: fedora:42
+      image: fedora:44
     steps:
       - name: Install system dependencies (GTK4 + libadwaita + extractors + validators + Rust)
         run: |

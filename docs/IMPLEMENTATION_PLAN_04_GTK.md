@@ -2723,7 +2723,7 @@ core.
   entry.
 - **Release workflow.** `.github/workflows/release.yml` triggers on
   `v*` tag pushes (and supports `workflow_dispatch` for dry-runs).
-  It builds inside the same `fedora:42` container as the CI
+  It builds inside the same `fedora:44` container as the CI
   packaging-dry-run job, derives `PALADIN_VERSION` by stripping the
   leading `v` from the tag, builds `paladin-cli`, `paladin-tui`, and
   `paladin-gtk` with `cargo build --release --locked`, then runs
@@ -3820,7 +3820,7 @@ into stdout, which is why captured stderr is always empty.)
   cleanly. Asserted by
   `crates/paladin-gtk/tests/gtk_smoke.rs::xvfb_run_launches_paladin_gtk_and_process_exits`;
   `.github/workflows/ci.yml` provisions the `clippy` and `test` jobs
-  inside a `fedora:42` container with `gtk4-devel`, `libadwaita-devel`,
+  inside a `fedora:44` container with `gtk4-devel`, `libadwaita-devel`,
   and (`test` only) `xorg-x11-server-Xvfb` so the test runs under a
   synthetic display instead of skipping. The container is required
   because `ubuntu-24.04` ships GTK 4.14 / libadwaita 1.5 — too old
@@ -7552,7 +7552,7 @@ sign-off.
     `desktop-file-validate` plus the AppStream validator on the
     installed payload.
     (`.github/workflows/ci.yml` now declares a `packaging-dry-run`
-    job that runs inside the same `fedora:42` container the
+    job that runs inside the same `fedora:44` container the
     `clippy` / `test` jobs use — GTK 4.16 + libadwaita 1.6 headers
     are present so `cargo build --release --locked -p paladin-gtk`
     resolves against the version floor. The job installs `nfpm`

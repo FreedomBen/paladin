@@ -23,10 +23,10 @@ jobs:
     # §"Dependencies (per §9)". The `ubuntu-24.04` image ships GTK 4.14
     # and libadwaita 1.5 — too old for those `v*` feature gates, so the
     # `gtk4-sys` / `libadwaita-sys` build scripts reject it. Build
-    # inside a Fedora 42 container so the system headers satisfy the
+    # inside a Fedora 44 container so the system headers satisfy the
     # version floor the plan locked in.
     container:
-      image: fedora:42
+      image: fedora:44
     steps:
       - name: Install system dependencies (GTK4 + libadwaita + Rust)
         run: |
@@ -43,14 +43,14 @@ jobs:
   test:
     name: cargo test
     runs-on: ubuntu-latest
-    # Same Fedora 42 container as `clippy` for the GTK 4.16 / libadwaita
+    # Same Fedora 44 container as `clippy` for the GTK 4.16 / libadwaita
     # 1.6 floor; additionally installs `xorg-x11-server-Xvfb` so
     # `crates/paladin-gtk/tests/gtk_smoke.rs` runs under `xvfb-run`
     # instead of skipping. The §"Smoke test" bullet in
     # docs/IMPLEMENTATION_PLAN_04_GTK.md gates Milestone 7 sign-off on that
     # test being green.
     container:
-      image: fedora:42
+      image: fedora:44
     steps:
       - name: Install system dependencies (GTK4 + libadwaita + Xvfb + Rust)
         run: |
@@ -133,7 +133,7 @@ jobs:
     # GTK4 + libadwaita 1.6 floor: the release binary build depends on
     # the gtk4-sys / libadwaita-sys crates' >= 1.6 + GTK 4.16 feature
     # gates, and ubuntu-24.04 ships GTK 4.14 / libadwaita 1.5. The job
-    # therefore runs inside the `fedora:42` container (matching the
+    # therefore runs inside the `fedora:44` container (matching the
     # clippy / test jobs above) so the system headers satisfy the
     # version floor without a PPA dance.
     #
@@ -150,7 +150,7 @@ jobs:
     # Contract pinned by
     # crates/paladin-gtk/tests/ci_packaging_dry_run_logic.rs.
     container:
-      image: fedora:42
+      image: fedora:44
     env:
       # The nfpm manifests reference `${PALADIN_VERSION}` (see the
       # `version: ${PALADIN_VERSION}` lines in both YAMLs). The
