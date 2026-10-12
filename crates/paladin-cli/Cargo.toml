@@ -80,5 +80,5 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # elements. Both stay test-side; the thinness guard in
 # `tests/thinness.rs` only scans `[dependencies]`.
 rqrr = "0.7"
-quick-xml = "0.36"
+quick-xml = "0.41"
 paladin-core = { path = "../paladin-core", version = "0.0.1", features = ["error-serde", "test-fault-injection"] }
