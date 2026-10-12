@@ -20,6 +20,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use secrecy::SecretString;
@@ -31,6 +32,23 @@ const PALADIN_GTK_BIN: &str = env!("CARGO_BIN_EXE_paladin-gtk");
 /// Wall-clock ceiling for an `xvfb-run paladin-gtk` invocation that
 /// is expected to exit. Generous to absorb cold-cache startup on CI.
 const SMOKE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Serializes every `xvfb-run` invocation in this test binary.
+///
+/// `xvfb-run -a` probes `/tmp/.X<n>-lock` files non-atomically, so
+/// concurrently started instances can pick the same display number
+/// and end up sharing one Xvfb. The first test to finish then kills
+/// the server the other app is still connected to, and GTK4's X11
+/// backend answers a lost display connection with a *silent*
+/// `_exit(1)` (the message was demoted to `g_debug` by GTK commit
+/// "x11: Be quiet on exit by default"). Observed as CI flakes where
+/// consecutive runs failed *different* smoke tests with the same
+/// signature: all expected stdout markers printed, then exit code 1
+/// with empty stderr. Holding this lock for the whole spawn → exit
+/// window keeps at most one synthetic display alive at a time. See
+/// the §"Smoke test" harness note in
+/// `docs/IMPLEMENTATION_PLAN_04_GTK.md`.
+static XVFB_SERIAL: Mutex<()> = Mutex::new(());
 
 /// Returns `true` when `xvfb-run` is on `$PATH` and reports a usable
 /// `--help`. CI installs it; many local dev environments do not.
@@ -48,6 +66,11 @@ fn xvfb_run_available() -> bool {
 /// stdout / stderr, and wait up to [`SMOKE_TIMEOUT`] for the child
 /// to exit. Returns the exit-status output bundle.
 fn run_under_xvfb(args: &[&str]) -> std::process::Output {
+    // A poisoned lock only means another test panicked while holding
+    // it; the guarded resource (exclusive ownership of a display) is
+    // still intact, so recover instead of cascading the failure.
+    let _xvfb_guard = XVFB_SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+
     assert!(
         Path::new(PALADIN_GTK_BIN).exists(),
         "CARGO_BIN_EXE_paladin-gtk does not point at an existing file: {PALADIN_GTK_BIN}",
@@ -65,12 +88,18 @@ fn run_under_xvfb(args: &[&str]) -> std::process::Output {
         .env_remove("WAYLAND_DISPLAY")
         // xvfb has no real GPU. GTK4's default `ngl` GSK renderer
         // pulls in `libGLESv2.so.2`, which is missing from the
-        // Fedora 42 CI container (and which would, even if present,
+        // Fedora CI container (and which would, even if present,
         // abort during teardown because xvfb provides no DRI3
         // device). Force the cairo software renderer so the
         // EGL/GLES path is never touched and `--exit-after-startup`
         // can tear down cleanly.
         .env("GSK_RENDERER", "cairo")
+        // Make a lost-X-connection death visible: GTK4's X11 backend
+        // `_exit(1)`s with only a `g_debug` line when the display
+        // connection drops, so opt the Gdk log domain into debug
+        // output. `xvfb-run` merges the child's stderr into stdout,
+        // so the line lands in the captured stdout on failure.
+        .env("G_MESSAGES_DEBUG", "Gdk")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

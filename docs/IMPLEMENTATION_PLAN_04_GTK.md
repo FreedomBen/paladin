@@ -3798,6 +3798,24 @@ decision shadows landed in `tests/row_context_menu_logic.rs`.
 
 Required for Milestone 7 sign-off. Runs in CI under `xvfb-run`.
 
+**Harness serialization.** Every `xvfb-run` invocation goes through the
+shared `run_under_xvfb` helper, which holds a process-wide `Mutex` for
+the full spawn → exit window so at most one `xvfb-run -a` instance is
+alive per test binary. Rationale: `xvfb-run -a` probes
+`/tmp/.X<n>-lock` files non-atomically, so concurrent instances can
+pick the same display number; once two apps share one Xvfb, the first
+test to finish kills the server the other app is still connected to,
+and GTK4's X11 backend answers a lost display connection with a
+*silent* `_exit(1)` (the message was demoted to `g_debug` by GTK
+commit "x11: Be quiet on exit by default", shipped since 4.2). This
+surfaced as CI flakes on 2026-10-12 (run 38304458931: two consecutive
+attempts failed *different* smoke tests with the same signature — all
+expected stdout markers printed, then exit code 1 with empty stderr).
+The helper also sets `G_MESSAGES_DEBUG=Gdk` on the child so a future
+connection loss prints GDK's debug line into the captured output
+instead of failing silently. (`xvfb-run` merges the child's stderr
+into stdout, which is why captured stderr is always empty.)
+
 - [x] `xvfb-run` launches `paladin-gtk` and the process exits
   cleanly. Asserted by
   `crates/paladin-gtk/tests/gtk_smoke.rs::xvfb_run_launches_paladin_gtk_and_process_exits`;
