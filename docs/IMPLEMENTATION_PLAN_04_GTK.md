@@ -7162,22 +7162,25 @@ sign-off.
     and the `<content_rating>` declaration.)
   - [x] Ship the scalable app icon at
     `data/icons/hicolor/scalable/apps/org.tamx.Paladin.Gui.svg` and
-    16/24/32/48 PNG fallbacks under
+    16/24/32/48/64/128/256/512 PNG fallbacks under
     `data/icons/hicolor/<size>/apps/org.tamx.Paladin.Gui.png`.
-    (Scalable SVG drawn at the GNOME HIG-standard 128×128 viewport
-    as a heraldic shield with a central keyhole and a six-digit
-    OTP display, rendered against an Adwaita "blue 3" gradient.
-    PNG fallbacks rasterized from the same SVG source via
-    `inkscape --export-type=png --export-width=<N> --export-height=<N>`
-    at 16 / 24 / 32 / 48 so a single SVG drives every fallback
-    size. Pinned by `tests/icon_assets_logic.rs`:
+    (The scalable SVG is a viewBox-pinned (`0 0 512 512`) wrapper
+    around the paladin-logo artwork embedded as a base64 PNG, so a
+    single source bitmap drives every scaled launcher / dialog
+    rendering. The source bitmap is checked in at
+    `data/icons/source/paladin-logo.png` and the 512×512 square
+    master at `data/icons/source/paladin-logo-square-512.png`; the
+    PNG fallbacks are downscaled from that square master at each of
+    the eight hicolor sizes so a future rerasterization derives
+    from the same on-disk source. Pinned by
+    `tests/icon_assets_logic.rs`:
     `scalable_svg_exists_at_expected_path`,
     `scalable_svg_basename_matches_app_id`,
     `scalable_svg_is_well_formed_svg_root`,
     `scalable_svg_declares_explicit_viewbox`,
     `scalable_svg_carries_spdx_header`,
     `png_fallbacks_exist_at_each_required_size`,
-    `png_fallbacks_use_png_magic_bytes`, and
+    `png_fallbacks_use_png_magic_bytes`,
     `png_fallbacks_have_matching_ihdr_dimensions` (parses the IHDR
     chunk and asserts that each PNG's width / height equals the
     `<size>` from its install directory so a future rerasterization
