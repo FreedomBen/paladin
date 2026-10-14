@@ -2617,11 +2617,25 @@ core.
   `16`/`24`/`32`/`48`/`64`/`128`/`256`/`512` PNG fallback set
   named `org.tamx.Paladin.Gui.png` is shipped under
   `/usr/share/icons/hicolor/<size>/apps/` for non-SVG icon
-  consumers. The 64 / 128 / 256 / 512 sizes cover what GNOME
-  Shell's app-drawer and search results actually request; without
-  them, Shell falls through to the scalable SVG and the launcher
-  glyph renders blank because the SVG's base64-embedded PNG
-  payload fails GdkPixbuf's icon-theme load path. The packaging
+  consumers. The 64 / 128 / 256 / 512 sizes cover the fixed sizes
+  GNOME Shell's search results, dash, and dialogs request — but the
+  app-grid request (96 px, a size with no fixed-size hicolor
+  directory) always resolves to the scalable SVG, so the SVGs
+  themselves must stay sniffable. Every shipped SVG keeps its
+  `<svg` root tag within the first 256 bytes of the file: the two
+  sniffers that gate GdkPixbuf's SVG loader both read only the head
+  of the file (the librsvg loader signature anchors `<svg` /
+  `<!DOCTYPE svg` at the start of the buffer, and the
+  `g_content_type_guess()` fallback runs on data alone — no
+  filename glob — where shared-mime-info's `image/svg+xml` magic
+  matches `<svg` only within bytes 0–256). A license comment
+  between the XML declaration and the root tag pushes `<svg` past
+  that window, the file sniffs as plain `application/xml`,
+  GdkPixbuf refuses to load it, and GNOME Shell draws the fallback
+  gear instead of the launcher glyph. License / doc comments
+  therefore live inside the root element, pinned by
+  `tests/icon_assets_logic.rs::shipped_svgs_keep_root_tag_within_sniff_window`
+  for every SVG under `data/icons/`. The packaging
   dry-run validates this layout in both the native and Flatpak
   builds.
 - Adwaita-style CSS in `data/style.css`, scoped via `gtk::CssProvider`.
@@ -7167,7 +7181,15 @@ sign-off.
     `png_fallbacks_have_matching_ihdr_dimensions` (parses the IHDR
     chunk and asserts that each PNG's width / height equals the
     `<size>` from its install directory so a future rerasterization
-    cannot silently land a mis-sized fallback).)
+    cannot silently land a mis-sized fallback), and
+    `shipped_svgs_keep_root_tag_within_sniff_window` (walks every
+    SVG under `data/icons/` — the hicolor pair plus the
+    gresource-bundled action placeholder — and asserts the `<svg`
+    root tag opens within the first 256 bytes, the sniffing window
+    shared by GdkPixbuf's loader signature and shared-mime-info's
+    `image/svg+xml` magic, so license / doc comments stay inside
+    the root element and the launcher glyph cannot regress to the
+    fallback gear in GNOME Shell's 96 px app grid).)
   - [x] Ship the symbolic variant at
     `data/icons/hicolor/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg`
     when the Adwaita palette warrants it.
@@ -7180,8 +7202,9 @@ sign-off.
     `symbolic_svg_exists_at_expected_path`,
     `symbolic_svg_basename_matches_app_id_symbolic_convention`,
     `symbolic_svg_is_well_formed_svg_root`,
-    `symbolic_svg_carries_spdx_header`, and
-    `symbolic_svg_uses_currentcolor_for_recoloring`.)
+    `symbolic_svg_carries_spdx_header`,
+    `symbolic_svg_uses_currentcolor_for_recoloring`, and the shared
+    `shipped_svgs_keep_root_tag_within_sniff_window` walker.)
   - [x] Wire `build.rs` + `data/paladin-gtk.gresource.xml` to compile
     the gresource bundle deterministically via
     `glib-compile-resources` (fixed input order).

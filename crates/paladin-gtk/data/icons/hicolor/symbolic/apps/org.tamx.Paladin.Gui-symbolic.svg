@@ -1,20 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  SPDX-License-Identifier: AGPL-3.0-or-later
-
-  Paladin GTK app icon (symbolic variant) per
-  IMPLEMENTATION_PLAN_04_GTK.md §"Linux desktop integration".
-
-  Installs verbatim at
-  /usr/share/icons/hicolor/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg
-  in both the native (.deb / .rpm) and Flatpak packaging formats.
-
-  Symbolic icons use currentColor so the Adwaita palette can recolor
-  them against the active foreground — a hardcoded fill renders
-  tinted-wrong on dark themes. The artwork is drawn at the GNOME HIG
-  16x16 symbolic viewport so the renderer can scale up without
-  losing crispness at toolbar / menubar sizes.
--->
 <svg
     xmlns="http://www.w3.org/2000/svg"
     width="16"
@@ -22,6 +6,28 @@
     viewBox="0 0 16 16"
     version="1.1">
   <title>Paladin</title>
+  <!--
+    SPDX-License-Identifier: AGPL-3.0-or-later
+
+    Paladin GTK app icon (symbolic variant) per
+    IMPLEMENTATION_PLAN_04_GTK.md §"Linux desktop integration".
+
+    This comment sits inside the <svg> root on purpose: content
+    sniffers (GdkPixbuf's loader signature, shared-mime-info magic)
+    only recognize the file as an SVG when <svg appears within the
+    first 256 bytes. Pinned by tests/icon_assets_logic.rs::
+    shipped_svgs_keep_root_tag_within_sniff_window.
+
+    Installs verbatim at
+    /usr/share/icons/hicolor/symbolic/apps/org.tamx.Paladin.Gui-symbolic.svg
+    in both the native (.deb / .rpm) and Flatpak packaging formats.
+
+    Symbolic icons use currentColor so the Adwaita palette can recolor
+    them against the active foreground — a hardcoded fill renders
+    tinted-wrong on dark themes. The artwork is drawn at the GNOME HIG
+    16x16 symbolic viewport so the renderer can scale up without
+    losing crispness at toolbar / menubar sizes.
+  -->
   <!--
     Shield silhouette drawn as a single filled path. Using
     fill="currentColor" lets the Adwaita engine tint it for the

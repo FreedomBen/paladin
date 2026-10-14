@@ -18,7 +18,7 @@
 //! all resolve identically.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use paladin_gtk::APP_ID;
 
@@ -250,6 +250,77 @@ fn symbolic_svg_carries_spdx_header() {
         contents.contains("SPDX-License-Identifier"),
         "symbolic SVG must carry an SPDX-License-Identifier comment",
     );
+}
+
+// --- SVG content sniffability -------------------------------------------------
+
+/// Byte window within which every shipped SVG must open its `<svg>`
+/// root tag.
+///
+/// Two sniffers gate `GdkPixbuf`'s SVG loader before any renderer sees
+/// the file, and both read only the head of the file:
+///
+/// * the librsvg pixbuf-loader signature anchors `<svg` /
+///   `<!DOCTYPE svg` at the start of the buffer;
+/// * the `g_content_type_guess()` fallback runs on data alone (no
+///   filename glob), and shared-mime-info's `image/svg+xml` magic
+///   matches `<svg` only within the first 256 bytes.
+///
+/// An SVG whose root tag sits past the window sniffs as plain
+/// `application/xml`, `GdkPixbuf` refuses to load it, and GNOME Shell's
+/// app grid — which requests 96 px, a size with no fixed-size hicolor
+/// directory, so the icon-theme lookup always lands on the scalable
+/// SVG — draws the fallback gear instead of the launcher glyph.
+/// License / doc comments therefore live inside the root element,
+/// never between the XML declaration and `<svg`.
+const SVG_SNIFF_WINDOW_BYTES: usize = 256;
+
+fn data_icons_root() -> PathBuf {
+    crate_root().join("data").join("icons")
+}
+
+fn collect_svgs_under(dir: &Path, found: &mut Vec<PathBuf>) {
+    let entries = fs::read_dir(dir)
+        .unwrap_or_else(|err| panic!("failed to read dir {}: {err}", dir.display()));
+    for entry in entries {
+        let path = entry
+            .unwrap_or_else(|err| panic!("failed to read dir entry under {}: {err}", dir.display()))
+            .path();
+        if path.is_dir() {
+            collect_svgs_under(&path, found);
+        } else if path.extension().is_some_and(|ext| ext == "svg") {
+            found.push(path);
+        }
+    }
+}
+
+#[test]
+fn shipped_svgs_keep_root_tag_within_sniff_window() {
+    let mut svgs = Vec::new();
+    collect_svgs_under(&data_icons_root(), &mut svgs);
+    svgs.sort();
+    // Guard the walker itself: the hicolor scalable + symbolic pair
+    // and the gresource-bundled action placeholder must all be found.
+    assert!(
+        svgs.len() >= 3,
+        "expected at least 3 shipped SVGs under {}, found {}",
+        data_icons_root().display(),
+        svgs.len(),
+    );
+    for path in svgs {
+        let contents = read_svg(&path);
+        let offset = contents
+            .find("<svg")
+            .unwrap_or_else(|| panic!("{} does not contain an <svg root tag", path.display()));
+        assert!(
+            offset < SVG_SNIFF_WINDOW_BYTES,
+            "{}: <svg root tag first appears at byte {offset}, past the \
+             {SVG_SNIFF_WINDOW_BYTES}-byte sniffing window shared by GdkPixbuf's loader \
+             signature and shared-mime-info's image/svg+xml magic — move comments inside \
+             the root element",
+            path.display(),
+        );
+    }
 }
 
 #[test]
