@@ -202,10 +202,19 @@ fn desktop_entry_keywords_covers_security_authenticator_vocabulary() {
     let keywords = entry.get("Keywords").expect("Keywords key present");
     let lowered = keywords.to_lowercase();
     // The launcher's search index uses these terms to surface Paladin
-    // when users type security or authenticator vocabulary. Verify the
-    // most discoverable terms are present so a launcher search for
-    // "otp", "totp", "hotp", or "authenticator" finds Paladin.
-    for needle in ["otp", "totp", "hotp", "authenticator", "2fa"] {
+    // when users type security or authenticator vocabulary. Launcher
+    // search matches casefolded per-word prefixes, so "authentication"
+    // and "two-step" must be keywords of their own — neither is a
+    // prefix of "authenticator" / "two-factor".
+    for needle in [
+        "otp",
+        "totp",
+        "hotp",
+        "authenticator",
+        "authentication",
+        "2fa",
+        "two-step",
+    ] {
         assert!(
             lowered.contains(needle),
             "Keywords must mention {needle:?}: {keywords:?}",

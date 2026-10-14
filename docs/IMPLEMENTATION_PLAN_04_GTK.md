@@ -2592,7 +2592,14 @@ core.
   name resolves to the app-ID-named files installed below),
   `StartupWMClass=org.tamx.Paladin.Gui`,
   `Categories=Utility;Security;`, and security/authenticator terms in
-  `Keywords=`, and uses `Exec=paladin-gtk` with no file/URI placeholders.
+  `Keywords=`. Launcher search (GLib's `g_desktop_app_info_search`)
+  matches casefolded per-word *prefixes*, so `Keywords=` lists
+  `Authentication` and `Two-Step` as their own terms — neither is a
+  prefix of `Authenticator` / `Two-Factor`, so the queries
+  "authentication" and "two-step" would otherwise find nothing. The
+  AppStream `<keywords>` block carries the same two terms for the
+  GNOME Software / Flathub search index. Uses `Exec=paladin-gtk`
+  with no file/URI placeholders.
   v0.2 does not register a MIME type or URI handler; imports start inside
   `ImportDialog`, matching the global-flag parser contract above. Both
   native (`.deb` / `.rpm`) and Flatpak builds install the desktop entry
@@ -7085,7 +7092,7 @@ sign-off.
     `Exec=paladin-gtk` with no `%F` / `%U` / `%f` / `%u` placeholders,
     `Terminal=false`, `StartupWMClass=org.tamx.Paladin.Gui`,
     `Categories=Utility;Security;`, and
-    `Keywords=OTP;TOTP;HOTP;2FA;MFA;Authenticator;One-Time-Password;Two-Factor;Security;`.
+    `Keywords=OTP;TOTP;HOTP;2FA;MFA;Authenticator;Authentication;One-Time-Password;Two-Factor;Two-Step;Security;`.
     `Comment=` and `GenericName=` are filled so launchers can render the
     tooltip / generic-name overlay. The §11.3 Flatpak and native package
     manifests install this file verbatim under
