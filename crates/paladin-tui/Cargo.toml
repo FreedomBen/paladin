@@ -34,7 +34,7 @@ name = "paladin-tui"
 path = "src/main.rs"
 
 [dependencies]
-paladin-core = { path = "../paladin-core", version = "0.0.1" }
+paladin-core = { path = "../paladin-core", version = "0.0.2" }
 clap = { version = "4.5", features = ["derive", "wrap_help"] }
 secrecy = "0.10"
 zeroize = { version = "1.8", features = ["zeroize_derive"] }

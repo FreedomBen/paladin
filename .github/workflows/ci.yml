@@ -171,7 +171,7 @@ jobs:
       # dry-run uses a sentinel since no tag is in flight on a push /
       # PR run. The string only needs to be a syntactically valid
       # version — the actual workspace version stays authoritative.
-      PALADIN_VERSION: "0.0.1-ci-dry-run"
+      PALADIN_VERSION: "0.0.2-ci-dry-run"
     steps:
       - name: Install system dependencies (GTK4 + libadwaita + extractors + validators + Rust)
         run: |

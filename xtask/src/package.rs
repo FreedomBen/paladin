@@ -117,7 +117,7 @@ pub(crate) struct Args {
 }
 
 const DEFAULT_NFPM_IMAGE: &str = "docker.io/goreleaser/nfpm:latest";
-const WORKSPACE_VERSION: &str = "0.0.1";
+const WORKSPACE_VERSION: &str = "0.0.2";
 
 pub(crate) fn run(args: &Args) -> Result<(), Box<dyn Error>> {
     let workspace = workspace_root()?;

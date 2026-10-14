@@ -7592,7 +7592,7 @@ sign-off.
     pinned at the upstream `v2.41.3` GitHub release artifact (a
     `dnf install` would let the distro pick a divergent version
     or skip the package entirely on Fedora), exports
-    `PALADIN_VERSION="0.0.1-ci-dry-run"` so the
+    `PALADIN_VERSION="0.0.2-ci-dry-run"` so the
     `version: ${PALADIN_VERSION}` substitution in both nfpm
     manifests resolves to a concrete string, and then runs
     `nfpm package -f packaging/deb/paladin-gtk.yaml -p deb -t

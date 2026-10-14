@@ -27,7 +27,7 @@ PROFILE ?= debug
 # `PALADIN_VERSION` is interpolated into the `version:` field of the
 # nfpm manifests; defaults to a developer-build sentinel matching the
 # CI `packaging-dry-run` job in `.github/workflows/ci.yml`.
-PALADIN_VERSION   ?= 0.0.1-dev
+PALADIN_VERSION   ?= 0.0.2-dev
 NFPM_IMAGE        ?= docker.io/goreleaser/nfpm:latest
 CONTAINER_RUNTIME ?= podman
 # Output directory for both .rpm and .deb artifacts. `RPM_OUTPUT_DIR`

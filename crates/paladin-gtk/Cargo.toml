@@ -38,7 +38,7 @@ path = "src/main.rs"
 # `sha1`, `sha2`, `rqrr`, `image`, `getrandom`, `directories`, or
 # `url` directly — those belong in `paladin-core`.
 [dependencies]
-paladin-core = { path = "../paladin-core", version = "0.0.1" }
+paladin-core = { path = "../paladin-core", version = "0.0.2" }
 clap = { version = "4.5", features = ["derive", "wrap_help"] }
 # The pure-logic `clipboard_clear` module holds copied clipboard
 # bytes in a `Zeroizing<Vec<u8>>` so the captured value zeroes on

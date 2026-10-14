@@ -12,7 +12,7 @@
 # public API surface scanned by `cargo public-api`.
 [package]
 name = "xtask"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 rust-version = "1.94"
 license = "AGPL-3.0-or-later"
@@ -42,8 +42,8 @@ clap_mangen = "0.2"
 # `paladin-cli` exposes `lib.rs` per IMPLEMENTATION_PLAN_02_CLI.md
 # "Crate layout"; `paladin-tui` already does per
 # IMPLEMENTATION_PLAN_03_TUI.md.
-paladin-cli = { path = "../crates/paladin-cli", version = "0.0.1" }
-paladin-tui = { path = "../crates/paladin-tui", version = "0.0.1" }
+paladin-cli = { path = "../crates/paladin-cli", version = "0.0.2" }
+paladin-tui = { path = "../crates/paladin-tui", version = "0.0.2" }
 
 # Gzip the rendered man pages before they land in the .rpm. Pinned at
 # the minor `flate2` tracked through the workspace's transitive deps

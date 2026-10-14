@@ -1712,7 +1712,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "paladin-cli"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "arboard",
  "assert_cmd",
@@ -1735,7 +1735,7 @@ dependencies = [
 
 [[package]]
 name = "paladin-core"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "argon2",
  "base32",
@@ -1765,7 +1765,7 @@ dependencies = [
 
 [[package]]
 name = "paladin-gtk"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "clap",
  "glib-build-tools",
@@ -1780,7 +1780,7 @@ dependencies = [
 
 [[package]]
 name = "paladin-tui"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "arboard",
  "assert_cmd",
@@ -3461,7 +3461,7 @@ checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 
 [[package]]
 name = "xtask"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "clap",
  "clap_mangen",
