@@ -741,37 +741,29 @@ fn run_init_worker_persists_plaintext_to_disk() {
 }
 
 #[test]
-fn format_init_dialog_description_renders_resolved_path_then_plaintext_warning() {
+fn format_init_dialog_description_renders_resolved_path_only() {
     // The InitDialog's `adw::StatusPage::set_description` attribute
-    // is populated from this helper. The rendered body leads with
-    // the resolved vault path (`"No vault found at {path}."`) so
-    // the user can confirm the destination before submitting, then
-    // surfaces the standard plaintext-storage warning verbatim
-    // through `paladin_core::format_plaintext_storage_warning()`.
-    // The two sections are separated by a blank line (`\n\n`) so
-    // the warning reads as its own paragraph. Pinning the format
-    // string through a helper keeps the wording in one place
-    // shared by the widget binding and the pure-logic tests, and
-    // routes the warning text through the shared paladin-core
-    // projection so the GUI cannot drift from the CLI / TUI copy.
+    // is populated from this helper. The rendered body is exactly
+    // the resolved vault path line (`"No vault found at {path}."`)
+    // so the user can confirm the destination before submitting.
+    // The plaintext-storage warning is deliberately NOT embedded
+    // here — it renders as a dedicated label below the passphrase
+    // rows, directly above the acknowledgement checkbox, visible
+    // only in plaintext mode (see
+    // `init_dialog_state_plaintext_warning_visible_*`).
     //
     // Sibling of
     // `paladin_gtk::unlock_dialog::format_unlock_dialog_description`
     // on the dialog-status-description side; together they pin
     // every first-mount dialog's body against a single source of
     // truth.
-    use paladin_core::format_plaintext_storage_warning;
     use paladin_gtk::init_dialog::format_init_dialog_description;
 
     let path = Path::new("/tmp/example/vault.bin");
     let rendered = format_init_dialog_description(path);
     assert_eq!(
-        rendered,
-        format!(
-            "No vault found at /tmp/example/vault.bin.\n\n{warning}",
-            warning = format_plaintext_storage_warning(),
-        ),
-        "description leads with the resolved path and routes the warning through paladin-core",
+        rendered, "No vault found at /tmp/example/vault.bin.",
+        "description renders exactly the resolved-path line",
     );
 }
 
@@ -791,20 +783,19 @@ fn format_init_dialog_description_starts_with_no_vault_found_at() {
 }
 
 #[test]
-fn format_init_dialog_description_contains_paladin_core_plaintext_warning_verbatim() {
-    // The plaintext-storage warning body is sourced through
-    // `paladin_core::format_plaintext_storage_warning()` so the
-    // GUI cannot drift from the CLI / TUI copy. Pinning a
-    // `contains` assertion alongside the full-string assertion
-    // guards against an accidental refactor that re-renders the
-    // warning locally.
+fn format_init_dialog_description_omits_plaintext_warning() {
+    // The plaintext-storage warning moved out of the `AdwStatusPage`
+    // description into a dedicated label rendered below the
+    // passphrase rows, directly above the acknowledgement checkbox.
+    // Embedding it here as well would double-render the warning on
+    // the plaintext path, so the description must stay free of it.
     use paladin_core::format_plaintext_storage_warning;
     use paladin_gtk::init_dialog::format_init_dialog_description;
 
     let rendered = format_init_dialog_description(Path::new("/x"));
     assert!(
-        rendered.contains(&format_plaintext_storage_warning()),
-        "description must embed the paladin-core plaintext warning verbatim; got {rendered:?}",
+        !rendered.contains(&format_plaintext_storage_warning()),
+        "description must not embed the plaintext warning; got {rendered:?}",
     );
 }
 
@@ -1532,6 +1523,70 @@ fn init_dialog_state_mode_tracks_field_emptiness() {
     assert_eq!(state.mode(), InitMode::Encrypted);
     state.set_confirm("");
     assert_eq!(state.mode(), InitMode::Plaintext);
+}
+
+// ---------------------------------------------------------------------------
+// InitDialogState::plaintext_warning_visible — warning label + checkbox
+// visibility
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_dialog_state_plaintext_warning_visible_on_new_state() {
+    // A fresh dialog has both passphrase fields empty (plaintext
+    // mode), so the warning label and the "I accept this risk"
+    // checkbox must both be shown. The widget binds both widgets'
+    // `set_visible` to this predicate.
+    let state = InitDialogState::new();
+    assert!(state.plaintext_warning_visible());
+}
+
+#[test]
+fn init_dialog_state_plaintext_warning_hidden_when_passphrase_non_empty() {
+    // Any text in the passphrase field switches the dialog to the
+    // encrypted path, where the plaintext-storage warning is moot —
+    // the warning label and the checkbox must both hide.
+    let mut state = InitDialogState::new();
+    state.set_passphrase("h");
+    assert!(!state.plaintext_warning_visible());
+}
+
+#[test]
+fn init_dialog_state_plaintext_warning_hidden_when_only_confirm_non_empty() {
+    // Text in only the confirm field also selects encrypted mode
+    // (`classify_mode`: any non-empty field → Encrypted), so the
+    // warning + checkbox hide for this half-typed pair too.
+    let mut state = InitDialogState::new();
+    state.set_confirm("h");
+    assert!(!state.plaintext_warning_visible());
+}
+
+#[test]
+fn init_dialog_state_plaintext_warning_visible_again_after_fields_cleared() {
+    // Deleting all typed text returns the dialog to plaintext mode,
+    // restoring the warning label and the checkbox.
+    let mut state = InitDialogState::new();
+    state.set_passphrase("hunter2");
+    state.set_confirm("hunter2");
+    assert!(!state.plaintext_warning_visible());
+    state.set_passphrase("");
+    state.set_confirm("");
+    assert!(state.plaintext_warning_visible());
+}
+
+#[test]
+fn init_dialog_state_plaintext_warning_visibility_tracks_mode() {
+    // The visibility predicate is exactly "plaintext mode" — pin the
+    // equivalence so the two cannot drift apart.
+    let mut state = InitDialogState::new();
+    for (pass, confirm) in [("", ""), ("a", ""), ("", "b"), ("a", "b")] {
+        state.set_passphrase(pass);
+        state.set_confirm(confirm);
+        assert_eq!(
+            state.plaintext_warning_visible(),
+            state.mode() == InitMode::Plaintext,
+            "visibility must equal plaintext-mode for pass={pass:?} confirm={confirm:?}",
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

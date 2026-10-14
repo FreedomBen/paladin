@@ -158,10 +158,17 @@ inclusion.
   `InitPrecheck::Clear` case as the normal create path,
   `InitPrecheck::Existing` as the destructive-confirmation gate
   (see below), and `InitPrecheck::Propagate` as a non-mutating inline
-  error. The plaintext path renders
+  error. The `AdwStatusPage` description carries only the resolved-path
+  line (`"No vault found at <path>."`). The plaintext path renders
   `paladin_core::format_plaintext_storage_warning()` verbatim — the
   same wording `PassphraseDialog`'s remove flow and the CLI / TUI use —
-  and the user must tick the confirmation before submission is enabled.
+  as a dedicated label below the two passphrase rows, directly above
+  the "I accept this risk" checkbox, and the user must tick the
+  confirmation before submission is enabled. The warning label and the
+  checkbox are visible only while both passphrase fields are empty
+  (`InitDialogState::plaintext_warning_visible`, i.e. plaintext mode);
+  typing into either field switches the dialog to the encrypted path
+  and hides both, and clearing the fields restores them.
   Encrypted submission requires two non-empty matching entries; one-empty
   or mismatched pairs reject inline with `invalid_passphrase`
   (`reason: "confirmation_mismatch"`). On submit, builds a
@@ -3112,6 +3119,13 @@ These run without a display server. Each lives under
 - [x] Plaintext-warning gate must be ticked before submission is
   enabled; the rendered text matches
   `paladin_core::format_plaintext_storage_warning()` verbatim.
+- [x] `format_init_dialog_description` renders only the resolved-path
+  line; the plaintext warning is not embedded in the `AdwStatusPage`
+  description.
+- [x] `InitDialogState::plaintext_warning_visible` is `true` only
+  while both passphrase fields are empty: typing into either field
+  hides the warning label + acknowledgement checkbox, clearing both
+  restores them.
 - [x] `paladin_core::classify_init_precheck` routing:
   `InitPrecheck::Clear` opens the normal create path,
   `InitPrecheck::Existing` opens the destructive-confirmation gate,
@@ -4099,11 +4113,17 @@ sign-off.
   already exists at the path; pre-commit + durability-unconfirmed
   handling).
   - [x] Add two `AdwPasswordEntryRow` passphrase entries (passphrase +
-    confirmation) to `InitDialogComponent`'s body, keeping the existing
-    `Missing`-branch path label as the `AdwStatusPage` description.
+    confirmation) to `InitDialogComponent`'s body; the `AdwStatusPage`
+    description carries only the resolved-path line
+    (`"No vault found at <path>."`).
   - [x] Render `paladin_core::format_plaintext_storage_warning()`
-    verbatim alongside a confirmation tick; gate submission on the tick
-    when both passphrase fields are empty (the plaintext path).
+    verbatim as a dedicated label below the passphrase rows, directly
+    above the "I accept this risk" checkbox; gate submission on the
+    tick when both passphrase fields are empty (the plaintext path).
+  - [x] Show the warning label and the acknowledgement checkbox only in
+    plaintext mode (`InitDialogState::plaintext_warning_visible`):
+    typing into either passphrase field hides both, clearing the
+    fields restores them.
   - [x] Route plaintext vs encrypted on submit by the empty-vs-non-empty
     state of the passphrase fields (both empty → plaintext; non-empty →
     encrypted).

@@ -5,8 +5,11 @@
 //! Per `docs/IMPLEMENTATION_PLAN_04_GTK.md` §"Component tree" and
 //! §"Vault interaction", `InitDialog` is the only path that creates
 //! a vault from the GUI (DESIGN §6, §7). The widget layer hosts two
-//! [`adw::PasswordEntryRow`] passphrase fields, an explicit
-//! plaintext-warning [`gtk::CheckButton`], and an in-dialog
+//! [`adw::PasswordEntryRow`] passphrase fields, a plaintext-storage
+//! warning [`gtk::Label`] with an explicit acknowledgement
+//! [`gtk::CheckButton`] directly beneath it (both visible only in
+//! plaintext mode — see
+//! [`InitDialogState::plaintext_warning_visible`]), and an in-dialog
 //! [`adw::AlertDialog`] for the `vault_exists` destructive gate; the
 //! pure-logic helpers in this module own the routing and rendering
 //! decisions so they can be unit-tested in `tests/init_dialog_logic.rs`
@@ -206,8 +209,10 @@ pub fn prepare_vault_init(
     }
 }
 
-/// Body text for the plaintext storage warning rendered above the
-/// confirmation checkbox. Wording matches
+/// Body text for the plaintext storage warning rendered below the
+/// passphrase rows, directly above the confirmation checkbox (both
+/// visible only in plaintext mode — see
+/// [`InitDialogState::plaintext_warning_visible`]). Wording matches
 /// [`paladin_core::format_plaintext_storage_warning`] verbatim so it
 /// stays in sync with the CLI / TUI.
 #[must_use]
@@ -623,14 +628,14 @@ pub fn format_init_dialog_marker(path: &Path) -> String {
 /// Body the widget hands to the [`InitDialogComponent`]'s
 /// `adw::StatusPage::set_description` attribute.
 ///
-/// Renders `"No vault found at <path>.\n\n<plaintext warning>"`
-/// where `<path>` is the resolved vault path the dialog will hand
-/// to `Store::create` on submit and `<plaintext warning>` is the
-/// `paladin_core::format_plaintext_storage_warning()` body.
-/// Leading with the resolved path lets the user confirm the
-/// destination before submitting; the warning is surfaced verbatim
-/// so the GUI cannot drift from the CLI / TUI copy — see
-/// [`plaintext_warning_body`].
+/// Renders exactly `"No vault found at <path>."` where `<path>` is
+/// the resolved vault path the dialog will hand to `Store::create`
+/// on submit, letting the user confirm the destination before
+/// submitting. The plaintext-storage warning is deliberately NOT
+/// embedded here — it renders as a dedicated label below the
+/// passphrase rows, directly above the acknowledgement checkbox,
+/// visible only in plaintext mode (see [`plaintext_warning_body`]
+/// and [`InitDialogState::plaintext_warning_visible`]).
 ///
 /// Takes the path by `&Path` so the widget can pass
 /// `&model.vault_path` without cloning, and uses [`format!`]
@@ -642,11 +647,7 @@ pub fn format_init_dialog_marker(path: &Path) -> String {
 /// first-mount dialog's body against a single source of truth.
 #[must_use]
 pub fn format_init_dialog_description(path: &Path) -> String {
-    format!(
-        "No vault found at {path}.\n\n{warning}",
-        path = path.display(),
-        warning = plaintext_warning_body(),
-    )
+    format!("No vault found at {path}.", path = path.display())
 }
 
 /// Freedesktop icon name the widget hands to the
@@ -1022,6 +1023,21 @@ impl InitDialogState {
         classify_mode(self.passphrase_text(), self.confirm_text())
     }
 
+    /// Whether the plaintext-storage warning label and its
+    /// acknowledgement checkbox are currently shown.
+    ///
+    /// The widget binds both widgets' `#[watch] set_visible` to this
+    /// predicate. The warning only applies to the plaintext path, so
+    /// it is visible exactly while [`Self::mode`] is
+    /// [`InitMode::Plaintext`] (both passphrase fields empty): typing
+    /// into either field switches the dialog to the encrypted path
+    /// and hides the warning + checkbox; clearing the fields restores
+    /// them.
+    #[must_use]
+    pub fn plaintext_warning_visible(&self) -> bool {
+        self.mode() == InitMode::Plaintext
+    }
+
     /// Whether the primary "Create vault" button is currently
     /// sensitive.
     ///
@@ -1346,9 +1362,11 @@ pub fn apply_msg(state: &mut InitDialogState, msg: InitDialogMsg) -> Option<Init
 /// Mounts a libadwaita [`adw::StatusPage`] heading naming the
 /// resolved vault path, two [`adw::PasswordEntryRow`] entries
 /// (passphrase + confirmation) inside an
-/// [`adw::PreferencesGroup`], a [`gtk::CheckButton`] for the
-/// plaintext-storage warning acknowledgement, an inline-error
-/// [`gtk::Label`] beneath the entries, and a "Create vault" submit
+/// [`adw::PreferencesGroup`], the plaintext-storage warning
+/// [`gtk::Label`] with its acknowledgement [`gtk::CheckButton`]
+/// directly beneath the entries (both visible only in plaintext
+/// mode per [`InitDialogState::plaintext_warning_visible`]), an
+/// inline-error [`gtk::Label`], and a "Create vault" submit
 /// button whose sensitivity binds to
 /// [`InitDialogState::submit_button_sensitive`] so the per-mode gate
 /// in [`prepare_vault_init`] never fires through a normal click.
@@ -1443,16 +1461,34 @@ impl SimpleComponent for InitDialogComponent {
                 },
             },
 
-            // Plaintext-warning acknowledgement checkbox. The
-            // standard warning body is already surfaced through the
-            // `AdwStatusPage` `set_description` above
-            // (`format_init_dialog_description`); this `gtk::CheckButton`
-            // carries the short affirmative caption and gates the
-            // plaintext path's `submit_button_sensitive` until the
-            // user explicitly acknowledges.
+            // Plaintext-storage warning body, rendered below the
+            // passphrase rows and directly above the acknowledgement
+            // checkbox so the risk statement sits beside the control
+            // that accepts it. Visible only in plaintext mode (both
+            // passphrase fields empty): typing a passphrase switches
+            // the dialog to the encrypted path, where the warning is
+            // moot, and hides the label together with the checkbox.
+            #[name = "warning_label"]
+            gtk::Label {
+                set_label: &plaintext_warning_body(),
+                set_xalign: 0.0,
+                set_wrap: true,
+                add_css_class: "warning",
+                #[watch]
+                set_visible: model.state.plaintext_warning_visible(),
+            },
+
+            // Plaintext-warning acknowledgement checkbox. The warning
+            // body is the `warning_label` directly above; this
+            // `gtk::CheckButton` carries the short affirmative caption
+            // and gates the plaintext path's `submit_button_sensitive`
+            // until the user explicitly acknowledges. Shares the
+            // label's plaintext-mode-only visibility.
             #[name = "warning_check"]
             gtk::CheckButton {
                 set_label: Some(format_init_dialog_plaintext_warning_label()),
+                #[watch]
+                set_visible: model.state.plaintext_warning_visible(),
                 // See the new-passphrase `connect_changed` comment.
                 connect_toggled[sender] => move |btn| {
                     let _ = sender
