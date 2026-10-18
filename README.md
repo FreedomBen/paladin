@@ -144,6 +144,19 @@ cargo run -p paladin-tui
 cargo run -p paladin-gtk     # requires GTK4 >= 4.16, libadwaita >= 1.6
 ```
 
+To try the add-account flows by hand, `scripts/generate-otpauth-qr.sh`
+builds a throwaway `otpauth://` URI (random secret by default), prints
+it, and renders it as a QR PNG with `qrencode`
+(`sudo dnf install qrencode`; not needed with `--no-image`):
+
+```sh
+scripts/generate-otpauth-qr.sh                     # TOTP QR -> target/otpauth-qr.png
+paladin add --qr target/otpauth-qr.png
+scripts/generate-otpauth-qr.sh --type hotp --copy  # PNG on the clipboard for the TUI / GTK Add dialog
+paladin add --uri "$(scripts/generate-otpauth-qr.sh --no-image)"
+scripts/generate-otpauth-qr.sh --help              # every flag, incl. --uri for negative tests
+```
+
 ## CI gate
 
 Per [`docs/DESIGN.md` §10](docs/DESIGN.md) and
