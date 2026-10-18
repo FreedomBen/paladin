@@ -9,12 +9,13 @@
 //! `paladin add --uri`. The render and `--copy` plumbing runs against
 //! recording stand-ins for `qrencode`, `wl-copy`, and `xclip`, so all of
 //! that needs only bash and coreutils. The real PNG round trip needs
-//! `qrencode` and is skipped with a note when it is not on `PATH`, like
-//! the `xvfb-run` cases in `paladin-gtk/tests/gtk_smoke.rs`.
+//! `qrencode`, which the CI `test` job installs: under GitHub Actions a
+//! missing `qrencode` fails that case, and elsewhere it is skipped with a
+//! note, like the `xvfb-run` cases in `paladin-gtk/tests/gtk_smoke.rs`.
 
 mod common;
 
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::SystemTime;
@@ -79,6 +80,22 @@ fn qrencode_available() -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
+}
+
+/// A `PATH` directory holding only a `bash` symlink: enough to run the
+/// script up to its `qrencode` check, which then fails even on hosts
+/// (like CI) that have `qrencode` installed.
+fn bash_only_path() -> TempDir {
+    let dir = test_tempdir();
+    let bash = std::env::var_os("PATH")
+        .and_then(|paths| {
+            std::env::split_paths(&paths)
+                .map(|entry| entry.join("bash"))
+                .find(|candidate| candidate.is_file())
+        })
+        .expect("bash on PATH");
+    symlink(bash, dir.path().join("bash")).expect("symlink bash");
+    dir
 }
 
 /// Stand-ins for `qrencode`, `wl-copy`, and `xclip` that record their
@@ -468,9 +485,15 @@ fn generated_uri_adds_an_account_that_yields_rfc4226_codes() {
 #[test]
 fn png_decodes_to_the_printed_uri_and_adds_via_qr() {
     if !qrencode_available() {
+        // Captured output hides skips in CI logs, so fail there instead.
+        assert!(
+            std::env::var_os("GITHUB_ACTIONS").is_none(),
+            "`qrencode` is not on PATH; the `test` job in \
+             .github/workflows/ci.yml must install it",
+        );
         eprintln!(
-            "skipping: `qrencode` is not on PATH; install it to exercise the \
-             PNG path of scripts/generate-otpauth-qr.sh."
+            "skipping: `qrencode` is not on PATH. CI installs it; install it \
+             locally to exercise the PNG path of scripts/generate-otpauth-qr.sh."
         );
         return;
     }
@@ -514,13 +537,14 @@ fn png_decodes_to_the_printed_uri_and_adds_via_qr() {
 
 #[test]
 fn missing_qrencode_is_reported_with_an_install_hint() {
-    if qrencode_available() {
-        eprintln!("skipping: `qrencode` is installed; this case covers its absence.");
-        return;
-    }
-    let dir = test_tempdir();
-    let png = dir.path().join("qr.png");
-    let output = run_script(&["--out", png.to_str().unwrap()]);
+    let bin = bash_only_path();
+    let png = bin.path().join("qr.png");
+    // `--secret` skips random_secret, whose coreutils are not on this PATH.
+    let output = Command::new(script_path())
+        .args(["--secret", RFC4226_SECRET, "--out", png.to_str().unwrap()])
+        .env("PATH", bin.path())
+        .output()
+        .expect("spawn script");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(

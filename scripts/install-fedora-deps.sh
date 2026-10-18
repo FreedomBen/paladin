@@ -91,11 +91,18 @@ PKGS_CORE=(
 )
 
 # paladin-gtk system bindings + Xvfb for the GTK smoke test.
-# (Matches `test` job additions in .github/workflows/ci.yml.)
+# (Matches the GTK `test` job additions in .github/workflows/ci.yml.)
 PKGS_GTK=(
     gtk4-devel
     libadwaita-devel
     xorg-x11-server-Xvfb
+)
+
+# Test tools for every workspace member: qrencode backs
+# scripts/generate-otpauth-qr.sh and its real-PNG test.
+# (Matches the other `test` job additions in .github/workflows/ci.yml.)
+PKGS_TEST=(
+    qrencode
 )
 
 # Packaging dry-run tools — only needed if you build .deb / .rpm locally.
@@ -111,7 +118,7 @@ PKGS_PACKAGING=(
     tar
 )
 
-PKGS=("${PKGS_CORE[@]}")
+PKGS=("${PKGS_CORE[@]}" "${PKGS_TEST[@]}")
 if [ "${WITH_GTK}" -eq 1 ]; then
     PKGS+=("${PKGS_GTK[@]}")
 fi

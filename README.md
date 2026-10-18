@@ -146,8 +146,8 @@ cargo run -p paladin-gtk     # requires GTK4 >= 4.16, libadwaita >= 1.6
 
 To try the add-account flows by hand, `scripts/generate-otpauth-qr.sh`
 builds a throwaway `otpauth://` URI (random secret by default), prints
-it, and renders it as a QR PNG with `qrencode`
-(`sudo dnf install qrencode`; not needed with `--no-image`):
+it, and renders it as a QR PNG with `qrencode` (installed by
+`scripts/install-fedora-deps.sh`; not needed with `--no-image`):
 
 ```sh
 scripts/generate-otpauth-qr.sh                     # TOTP QR -> target/otpauth-qr.png

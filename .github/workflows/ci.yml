@@ -48,16 +48,19 @@ jobs:
     # `crates/paladin-gtk/tests/gtk_smoke.rs` runs under `xvfb-run`
     # instead of skipping. The §"Smoke test" bullet in
     # docs/IMPLEMENTATION_PLAN_04_GTK.md gates Milestone 7 sign-off on that
-    # test being green.
+    # test being green. `qrencode` backs the real-PNG round trip in
+    # `crates/paladin-cli/tests/scripts_generate_otpauth_qr.rs`, which
+    # fails rather than skips under GitHub Actions when it is missing.
     container:
       image: fedora:44
     steps:
-      - name: Install system dependencies (GTK4 + libadwaita + Xvfb + Rust)
+      - name: Install system dependencies (GTK4 + libadwaita + Xvfb + qrencode + Rust)
         run: |
           dnf install -y --setopt=install_weak_deps=False \
             rustup gcc pkg-config openssl-devel \
             gtk4-devel libadwaita-devel \
             xorg-x11-server-Xvfb \
+            qrencode \
             git ca-certificates
           rustup-init -y --no-modify-path --default-toolchain none --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
